@@ -113,16 +113,6 @@ def test_stockfish_block_list_is_persistent() -> None:
         assert stockfish_block_list_entry("somebot", block_list_path)["matched_text"] == "Runs SF 17."
 
 
-def test_stockfish_block_list_reads_legacy_plain_text() -> None:
-    """Test that the JSONL blocklist reader still reads the legacy text file."""
-    with tempfile.TemporaryDirectory() as temp:
-        block_list_path = Path(temp) / "stockfish_blocklist.jsonl"
-        block_list_path.with_suffix(".txt").write_text("OldBot\nOtherBot # old comment\n", encoding="utf-8")
-
-        assert stockfish_block_list_contains("oldbot", block_list_path)
-        assert stockfish_block_list_contains("otherbot", block_list_path)
-
-
 def test_matchmaking_uses_stockfish_block_list() -> None:
     """Test that matchmaking blocks Stockfish blocklist entries by default."""
     mock_li = Mock()

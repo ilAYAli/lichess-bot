@@ -19,7 +19,6 @@ MULTIPROCESSING_LIST_TYPE: TypeAlias = Sequence[model.Challenge]
 
 logger = logging.getLogger(__name__)
 STOCKFISH_BLOCK_LIST_PATH = Path.home() / ".config" / "enyo" / "stockfish_blocklist.jsonl"
-LEGACY_STOCKFISH_BLOCK_LIST_PATH = Path.home() / ".config" / "enyo" / "stockfish_blocklist.txt"
 STOCKFISH_PROFILE_PATTERNS = (
     re.compile(r"\bstockfish\b", re.IGNORECASE),
     re.compile(r"\bsf\s*[-_]?\s*1[0-9]\b", re.IGNORECASE),
@@ -84,13 +83,8 @@ def read_stockfish_block_list(path: Path = STOCKFISH_BLOCK_LIST_PATH) -> set[str
 
 
 def stockfish_block_list_paths(path: Path = STOCKFISH_BLOCK_LIST_PATH) -> list[Path]:
-    """Return the JSONL path and its legacy plain-text path."""
-    paths = [path]
-    if path == STOCKFISH_BLOCK_LIST_PATH:
-        paths.append(LEGACY_STOCKFISH_BLOCK_LIST_PATH)
-    elif path.suffix == ".jsonl":
-        paths.append(path.with_suffix(".txt"))
-    return paths
+    """Return the JSONL blocklist path."""
+    return [path]
 
 
 def read_stockfish_block_list_file(path: Path) -> set[str]:
@@ -129,14 +123,9 @@ def stockfish_block_list_entry(username: str, path: Path = STOCKFISH_BLOCK_LIST_
 
 
 def stockfish_block_list_username(line: str) -> str:
-    """Return a normalized username from a JSONL or legacy plain-text blocklist line."""
-    text = line.strip()
-    if not text or text.startswith("#"):
-        return ""
-    if text.startswith("{"):
-        entry = stockfish_block_list_entry_from_line(text)
-        return str(entry.get("username", "")).strip().casefold()
-    return text.split("#", 1)[0].strip().casefold()
+    """Return a normalized username from a JSONL blocklist line."""
+    entry = stockfish_block_list_entry_from_line(line)
+    return str(entry.get("username", "")).strip().casefold()
 
 
 def stockfish_block_list_contains(username: str, path: Path = STOCKFISH_BLOCK_LIST_PATH) -> bool:
