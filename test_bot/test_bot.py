@@ -13,6 +13,7 @@ import tempfile
 from types import SimpleNamespace
 from multiprocessing import Manager
 from queue import Queue
+from requests import HTTPError, Response
 import test_bot.lichess
 from lib import config
 from lib.timer import Timer, seconds
@@ -28,6 +29,17 @@ logging_level = logging.DEBUG
 testing_log_file_name = None
 lichess_bot.logging_configurer(logging_level, testing_log_file_name, True)
 logger = logging.getLogger(__name__)
+
+
+def test_rejected_move_submission_is_not_a_stream_error() -> None:
+    """Test that a rejected move POST is classified separately from stream errors."""
+    response = Response()
+    response.status_code = 400
+    response.url = "https://lichess.org/api/bot/game/gameid/move/e2e4?offeringDraw=false"
+    error = HTTPError(response=response)
+    game = SimpleNamespace(id="gameid")
+
+    assert lichess_bot.is_rejected_move_submission(game, error)
 
 
 def lichess_org_simulator(move_queue: Queue[chess.Move | None],

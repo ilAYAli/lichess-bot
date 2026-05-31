@@ -662,6 +662,30 @@ def game_is_active(li: lichess.Lichess, game_id: str) -> bool:
     return game_id in (ongoing_game["gameId"] for ongoing_game in active_games)
 
 
+def is_rejected_move_submission(game: model.Game, exception: BaseException) -> bool:
+    """Return whether Lichess rejected a move POST for this game."""
+    if not isinstance(exception, HTTPError) or exception.response is None:
+        return False
+
+    url = getattr(exception.response, "url", "") or ""
+    return f"/api/bot/game/{game.id}/move/" in url
+
+
+def refresh_game_state_from_stream(li: lichess.Lichess, game: model.Game) -> bool:
+    """Refresh a game state snapshot without reopening the game worker."""
+    try:
+        with li.get_game_stream(game.id) as response:
+            initial_state = json.loads(next(response.iter_lines(chunk_size=1)).decode("utf-8"))
+            state = initial_state.get("state")
+            if isinstance(state, dict):
+                game.state = state
+                return True
+    except (HTTPError, ReadTimeout, RemoteDisconnected, ChunkedEncodingError, RequestsConnectionError,
+            StopIteration, json.JSONDecodeError):
+        logger.warning(f"Could not refresh state for {game.url()} after rejected move.", exc_info=True)
+    return False
+
+
 def start_game_thread(active_games: dict[str, str], game_id: str, opponent_name: str,
                       play_game_args: PlayGameArgsType, pool: POOL_TYPE, games_in_progress: set[str]) -> None:
     """Start a game thread, unless the game already has one (e.g., a repeated `gameStart` after a reconnect)."""
@@ -911,6 +935,20 @@ def play_game(li: lichess.Lichess,
                         stay_in_game = False
                 except (HTTPError, ReadTimeout, RemoteDisconnected, ChunkedEncodingError, RequestsConnectionError,
                         lichess.RateLimitedError, StopIteration) as e:
+                    if is_rejected_move_submission(game, e):
+                        status_code = e.response.status_code if isinstance(e, HTTPError) and e.response else "unknown"
+                        logger.warning(f"Move for {game.url()} was rejected by Lichess ({status_code}); "
+                                       "refreshing game state without reopening the worker.")
+                        if refresh_game_state_from_stream(li, game):
+                            board = setup_board(game)
+                            if is_game_over(game):
+                                tell_user_game_result(game, board)
+                                engine.send_game_result(game, board)
+                                conversation.send_message("player", goodbye)
+                                conversation.send_message("spectator", goodbye_spectators)
+                        stay_in_game = False
+                        continue
+
                     if should_reopen_game_stream(li, game, e):
                         reopen_delay = game_stream_reopen_delay(reopen_delay, last_reopen)
                         time.sleep(to_seconds(reopen_delay))
