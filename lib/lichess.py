@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 MAX_CHAT_MESSAGE_LEN = 140  # The maximum characters in a chat message.
 
 
+class MissingTokenInfoError(RuntimeError):
+    """The token test endpoint returned no information for the requested token."""
+
+
 class Stop:
     """Class to stop the bot."""
 
@@ -151,7 +155,11 @@ class Lichess:
         self.challenge_rate_limit_backoff_seconds = 60.0
 
         # Confirm that the OAuth token has the proper permission to play on lichess
-        token_response = cast(TOKEN_TESTS_TYPE, self.api_post("token_test", data=token))
+        try:
+            token_response = cast(TOKEN_TESTS_TYPE, self.api_post("token_test", data=token))
+        except MissingTokenInfoError as exc:
+            raise RuntimeError("Lichess token test did not return information about the bot's token after retries. "
+                               "This can happen when lichess.org is unhealthy; try again before replacing the token.") from exc
         token_info = token_response.get(token)
 
         if not token_info:
@@ -166,7 +174,7 @@ class Lichess:
                                f"The current token has: {scopes}.")
 
     @backoff.on_exception(backoff.constant,
-                          (RemoteDisconnected, RequestsConnectionError, HTTPError, ReadTimeout),
+                          (RemoteDisconnected, RequestsConnectionError, HTTPError, ReadTimeout, MissingTokenInfoError),
                           max_time=60,
                           interval=0.1,
                           giveup=is_final,
@@ -272,7 +280,8 @@ class Lichess:
         logging.getLogger("backoff").setLevel(self.logging_level)
         path_template = self.get_path_template(endpoint_name)
         url = urljoin(self.baseUrl, path_template.format(*template_args))
-        response = self.session.post(url, data=data, headers=headers, params=params, json=payload, timeout=2)
+        timeout = 10 if endpoint_name == "token_test" else 2
+        response = self.session.post(url, data=data, headers=headers, params=params, json=payload, timeout=timeout)
 
         if endpoint_name == "challenge":
             return self.handle_challenge(response)
@@ -284,6 +293,9 @@ class Lichess:
             response.raise_for_status()
 
         json_response: ChallengeType | TOKEN_TESTS_TYPE | None = response.json()
+        if endpoint_name == "token_test" and isinstance(data, str):
+            if not isinstance(json_response, dict) or data not in json_response:
+                raise MissingTokenInfoError("Lichess token test response did not include the requested token.")
         return json_response
 
     def get_path_template(self, endpoint_name: str) -> str:
