@@ -666,6 +666,11 @@ def is_rejected_move_submission(game: model.Game, exception: BaseException) -> b
     """Return whether Lichess rejected a move POST for this game."""
     if not isinstance(exception, HTTPError) or exception.response is None:
         return False
+    if exception.response.status_code >= 500:
+        return False
+
+    if exception.response.status_code >= 500:
+        return False
 
     url = getattr(exception.response, "url", "") or ""
     return f"/api/bot/game/{game.id}/move/" in url
@@ -938,7 +943,7 @@ def play_game(li: lichess.Lichess,
                     if is_rejected_move_submission(game, e):
                         status_code = e.response.status_code if isinstance(e, HTTPError) and e.response else "unknown"
                         logger.warning(f"Move for {game.url()} was rejected by Lichess ({status_code}); "
-                                       "refreshing game state without reopening the worker.")
+                                       "refreshing game state.")
                         if refresh_game_state_from_stream(li, game):
                             board = setup_board(game)
                             if is_game_over(game):
@@ -946,8 +951,9 @@ def play_game(li: lichess.Lichess,
                                 engine.send_game_result(game, board)
                                 conversation.send_message("player", goodbye)
                                 conversation.send_message("spectator", goodbye_spectators)
-                        stay_in_game = False
-                        continue
+                                stay_in_game = False
+                                continue
+                        raise GameStreamReconnect(game.id) from e
 
                     if should_reopen_game_stream(li, game, e):
                         reopen_delay = game_stream_reopen_delay(reopen_delay, last_reopen)

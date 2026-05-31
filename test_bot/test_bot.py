@@ -42,6 +42,17 @@ def test_rejected_move_submission_is_not_a_stream_error() -> None:
     assert lichess_bot.is_rejected_move_submission(game, error)
 
 
+def test_server_error_on_move_is_not_a_rejected_submission() -> None:
+    """Test that 5xx errors on the move endpoint fall through to the reconnect path."""
+    response = Response()
+    response.status_code = 500
+    response.url = "https://lichess.org/api/bot/game/gameid/move/e2e4?offeringDraw=false"
+    error = HTTPError(response=response)
+    game = SimpleNamespace(id="gameid")
+
+    assert not lichess_bot.is_rejected_move_submission(game, error)
+
+
 def lichess_org_simulator(move_queue: Queue[chess.Move | None],
                           board_queue: Queue[chess.Board],
                           clock_queue: Queue[tuple[datetime.timedelta, datetime.timedelta, datetime.timedelta]],
