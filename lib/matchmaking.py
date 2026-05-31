@@ -173,7 +173,7 @@ def block_stockfish_profile(username: str, profile: UserProfileType, path: Path 
     if not matched_text:
         return False
 
-    logger.warning(f"Blocking {username}: public profile {field} mentions Stockfish.")
+    logger.warning(f"Detected Stockfish-derived bot {username}: public profile {field} mentions Stockfish.")
     add_stockfish_block_list(username, "public profile", field, matched_text, path)
     return True
 
@@ -184,7 +184,7 @@ def block_stockfish_text(username: str, text: str, source: str, path: Path = STO
     if not matched_text:
         return False
 
-    logger.warning(f"Blocking {username}: {source} mentions Stockfish.")
+    logger.warning(f"Detected Stockfish-derived bot {username}: {source} mentions Stockfish.")
     add_stockfish_block_list(username, source, source, matched_text, path)
     return True
 
@@ -383,9 +383,10 @@ class Matchmaking:
             while online_bots:
                 bot = random.choices(online_bots, weights=weights)[0]
                 bot_profile = self.li.get_public_data(bot["username"])
+                stockfish_profile_detected = block_stockfish_profile(bot["username"], bot_profile)
                 if bot_profile.get("blocking"):
                     self.add_to_block_list(bot["username"])
-                elif self.matchmaking_cfg.ignore_stockfish_blocklist or not block_stockfish_profile(bot["username"], bot_profile):
+                elif self.matchmaking_cfg.ignore_stockfish_blocklist or not stockfish_profile_detected:
                     bot_username = bot["username"]
                     break
 

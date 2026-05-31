@@ -163,6 +163,42 @@ def test_matchmaking_can_ignore_stockfish_block_list() -> None:
         assert not matchmaking.in_block_list("SomeBot")
 
 
+def test_matchmaking_records_stockfish_profile_when_blocklist_is_ignored() -> None:
+    """Test that ignored Stockfish filtering still records profile detections."""
+    mock_li = Mock()
+    mock_li.get_online_bots.return_value = [{
+        "username": "SomeBot",
+        "perfs": {"bullet": {"games": 1, "rating": 2000}},
+    }]
+    mock_li.get_public_data.return_value = {"username": "SomeBot", "profile": {"bio": "Running Stockfish 17."}}
+    mock_config = Configuration({
+        "challenge": {"variants": ["standard"]},
+        "matchmaking": {
+            "allow_matchmaking": False,
+            "block_list": [],
+            "online_block_list": [],
+            "ignore_stockfish_blocklist": True,
+            "overrides": {},
+            "challenge_initial_time": [60],
+            "challenge_increment": [1],
+            "challenge_days": [0],
+            "challenge_variant": "standard",
+            "challenge_mode": "rated",
+            "rating_preference": "none",
+            "opponent_min_rating": 0,
+            "opponent_max_rating": 4000,
+            "opponent_rating_difference": None,
+        },
+    })
+    mock_user_profile: UserProfileType = {"username": "testbot", "perfs": {"bullet": {"rating": 2000}}}
+    matchmaking = Matchmaking(mock_li, mock_config, mock_user_profile)
+
+    with patch("lib.matchmaking.block_stockfish_profile", return_value=True) as block_stockfish_profile:
+        assert matchmaking.choose_opponent()[0] == "SomeBot"
+
+    block_stockfish_profile.assert_called_once()
+
+
 def test_game_category_standard_blitz() -> None:
     """Test blitz time control with config values."""
     # challenge_initial_time: 180 (3 min), challenge_increment: 1

@@ -767,12 +767,15 @@ def handle_challenge(event: EventType, li: lichess.Lichess, challenge_queue: MUL
         li.decline_challenge(chlng.id, reason="generic")
         return
 
-    if use_stockfish_blocklist and chlng.challenger.is_bot:
+    stockfish_profile_detected = False
+    if chlng.challenger.is_bot:
         with contextlib.suppress(Exception):
-            if matchmaking.block_stockfish_profile(chlng.challenger.name, li.get_public_data(chlng.challenger.name)):
-                logger.warning(f"Decline {chlng}: public profile mentions Stockfish.")
-                li.decline_challenge(chlng.id, reason="generic")
-                return
+            stockfish_profile_detected = matchmaking.block_stockfish_profile(chlng.challenger.name,
+                                                                             li.get_public_data(chlng.challenger.name))
+    if use_stockfish_blocklist and stockfish_profile_detected:
+        logger.warning(f"Decline {chlng}: public profile mentions Stockfish.")
+        li.decline_challenge(chlng.id, reason="generic")
+        return
 
     active_games = li.get_ongoing_games() or []
     opponent_engagements = Counter(game["opponent"]["username"] for game in active_games)
