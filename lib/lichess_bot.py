@@ -252,7 +252,7 @@ def thread_logging_configurer(queue: LOGGING_QUEUE_TYPE) -> None:
 
 def start(li: lichess.Lichess, user_profile: UserProfileType, config: Configuration, logging_level: int,
           log_filename: str | None, disable_auto_logging: bool, one_game: bool = False,
-          direct_challenge: str | None = None) -> None:
+          direct_challenge: str | None = None, max_rating_loss: int | None = None) -> None:
     """
     Start lichess-bot.
 
@@ -264,6 +264,7 @@ def start(li: lichess.Lichess, user_profile: UserProfileType, config: Configurat
     :param disable_auto_logging: Whether to disable automatic logging.
     :param one_game: Whether the bot should play only one completed game.
     :param direct_challenge: A username to challenge once after the event stream is connected.
+    :param max_rating_loss: Stop accepting or creating games after one game loses this much Elo.
     """
     logger.info(f"You're now connected to {config.url} and awaiting challenges.")
     manager = multiprocessing.Manager()
@@ -304,7 +305,8 @@ def start(li: lichess.Lichess, user_profile: UserProfileType, config: Configurat
                          logging_queue,
                          pgn_queue,
                          one_game,
-                         direct_challenge)
+                         direct_challenge,
+                         max_rating_loss)
     finally:
         control_stream.terminate()
         control_stream.join()
@@ -338,7 +340,8 @@ def lichess_bot_main(li: lichess.Lichess,
                      logging_queue: LOGGING_QUEUE_TYPE,
                      pgn_queue: PGN_QUEUE_TYPE,
                      one_game: bool,
-                     direct_challenge: str | None) -> None:
+                     direct_challenge: str | None,
+                     max_rating_loss: int | None = None) -> None:
     """
     Handle all the games and challenges.
 
@@ -352,11 +355,14 @@ def lichess_bot_main(li: lichess.Lichess,
     :param pgn_queue: The queue containing the PGN games.
     :param one_game: Whether the bot should play only one completed game.
     :param direct_challenge: A username to challenge once after the event stream is connected.
+    :param max_rating_loss: Stop accepting or creating games after one game loses this much Elo.
     """
     max_games = config.challenge.concurrency
 
     one_game_completed = False
     one_game_stopping = False
+    rating_loss_guard_triggered = False
+    session_rating_delta = 0
     direct_challenge_sent = False
     direct_challenge_id = ""
     direct_challenge_timer = Timer(seconds(25))
@@ -389,6 +395,8 @@ def lichess_bot_main(li: lichess.Lichess,
     if config.quit_after_all_games_finish:
         logger.info("When quitting, lichess-bot will first wait for all running games to finish.")
         logger.info("Press Ctrl-C twice to quit immediately.")
+    if max_rating_loss is not None:
+        logger.info(f"Rating loss guard enabled: stopping after one game loses {max_rating_loss} Elo.")
 
     with multiprocessing.pool.Pool(max_games + 1) as pool:
         while not (stop.terminated or stop.restart or (one_game_stopping and not active_games)):
@@ -409,7 +417,12 @@ def lichess_bot_main(li: lichess.Lichess,
                 if one_game:
                     one_game_stopping = True
             elif event["type"] == "challenge":
-                if direct_challenge:
+                if rating_loss_guard_triggered:
+                    chlng = model.Challenge(event["challenge"], user_profile)
+                    if not chlng.from_self:
+                        logger.info(f"Decline {chlng}: rating loss guard is active.")
+                        li.decline_challenge(chlng.id, reason="later")
+                elif direct_challenge:
                     chlng = model.Challenge(event["challenge"], user_profile)
                     if not chlng.from_self:
                         logger.info(f"Decline {chlng} while waiting for direct challenge.")
@@ -445,6 +458,21 @@ def lichess_bot_main(li: lichess.Lichess,
                            correspondence_queue,
                            active_games,
                            low_time_games)
+            elif event["type"] == "gameFinish":
+                rating_diff = rating_diff_from_game_finish(event)
+                if rating_diff is not None:
+                    session_rating_delta += rating_diff
+                    logger.info(f"Game rating delta: {rating_diff:+d} Elo. "
+                                f"Session rating delta: {session_rating_delta:+d} Elo.")
+                    if (max_rating_loss is not None
+                            and rating_diff <= -max_rating_loss
+                            and not rating_loss_guard_triggered):
+                        rating_loss_guard_triggered = True
+                        one_game_stopping = True
+                        challenge_queue[:] = []
+                        logger.error("Rating loss guard triggered: "
+                                     f"game rating delta {rating_diff:+d} Elo <= -{max_rating_loss}. "
+                                     "No new games will be accepted or created.")
 
             start_low_time_games(low_time_games, active_games, max_games, pool, play_game_args)
             check_in_on_correspondence_games(pool,
@@ -475,6 +503,19 @@ def lichess_bot_main(li: lichess.Lichess,
             control_queue.task_done()
 
         close_pool(pool, active_games, config)
+
+
+def rating_diff_from_game_finish(event: EventType) -> int | None:
+    """Return our rating difference from a gameFinish event if Lichess included one."""
+    if event.get("type") != "gameFinish":
+        return None
+    rating_diff = event.get("game", {}).get("ratingDiff")
+    if rating_diff is None:
+        return None
+    try:
+        return int(rating_diff)
+    except (TypeError, ValueError):
+        return None
 
 
 def close_pool(pool: POOL_TYPE, active_games: set[str], config: Configuration) -> None:
@@ -1273,7 +1314,14 @@ def start_lichess_bot() -> None:
     parser.add_argument("--challenge",
                         metavar="USERNAME",
                         help="Challenge one user once, then exit after that game or attempt.")
+    parser.add_argument("--max-rating-loss",
+                        type=int,
+                        default=None,
+                        metavar="N",
+                        help="Stop accepting or creating games after one game loses N Elo.")
     args = parser.parse_args()
+    if args.max_rating_loss is not None and args.max_rating_loss < 1:
+        parser.error("--max-rating-loss must be an integer >= 1")
 
     logging_level = logging.DEBUG if args.v else logging.INFO
     logging_configurer(logging_level, args.logfile, args.disable_auto_logging)
@@ -1309,7 +1357,8 @@ def start_lichess_bot() -> None:
               args.logfile,
               args.disable_auto_logging,
               args.one_game or bool(args.challenge),
-              args.challenge)
+              args.challenge,
+              args.max_rating_loss)
     else:
         logger.error(f"{username} is not a bot account. Please upgrade it to a bot account!")
     logging.shutdown()
