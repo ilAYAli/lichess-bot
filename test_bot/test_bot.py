@@ -11,6 +11,9 @@ import logging
 import tempfile
 from multiprocessing import Manager
 from queue import Queue
+from unittest.mock import Mock
+from requests import Response
+from requests.exceptions import HTTPError
 import test_bot.lichess
 from lib import config
 from lib.timer import Timer, seconds
@@ -26,6 +29,53 @@ logging_level = logging.DEBUG
 testing_log_file_name = None
 lichess_bot.logging_configurer(logging_level, testing_log_file_name, True)
 logger = logging.getLogger(__name__)
+
+
+def http_error(status_code: int) -> HTTPError:
+    """Create an HTTPError with a status code."""
+    response = Response()
+    response.status_code = status_code
+    return HTTPError(response=response)
+
+
+def test_game_stream_rate_limit_is_not_final() -> None:
+    """Test that game stream 429s are retried by the play-game backoff."""
+    assert not lichess_bot.is_play_game_final(http_error(429))
+
+
+def test_game_stream_client_error_is_final() -> None:
+    """Test that ordinary client errors still stop play-game retries."""
+    assert lichess_bot.is_play_game_final(http_error(404))
+
+
+def test_start_game_thread_ignores_duplicate_running_game() -> None:
+    """Test that duplicate gameStart events do not spawn duplicate workers."""
+    active_games = {"gameid"}
+    running_games = {"gameid"}
+    play_game_args = lichess_bot.PlayGameArgsType()
+    pool = SimpleNamespace(apply_async=Mock())
+
+    lichess_bot.start_game_thread(active_games, running_games, "gameid", play_game_args, pool)
+
+    pool.apply_async.assert_not_called()
+    assert active_games == {"gameid"}
+    assert running_games == {"gameid"}
+    assert "game_id" not in play_game_args
+
+
+def test_start_game_thread_allows_queued_active_game() -> None:
+    """Test that accepted queued games still start once."""
+    active_games = {"gameid"}
+    running_games: set[str] = set()
+    play_game_args = lichess_bot.PlayGameArgsType()
+    pool = SimpleNamespace(apply_async=Mock())
+
+    lichess_bot.start_game_thread(active_games, running_games, "gameid", play_game_args, pool)
+
+    pool.apply_async.assert_called_once()
+    assert active_games == {"gameid"}
+    assert running_games == {"gameid"}
+    assert play_game_args["game_id"] == "gameid"
 
 
 def lichess_org_simulator(move_queue: Queue[chess.Move | None],

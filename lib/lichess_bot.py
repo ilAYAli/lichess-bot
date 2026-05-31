@@ -46,6 +46,21 @@ MULTIPROCESSING_LIST_TYPE: TypeAlias = MutableSequence[model.Challenge]
 POOL_TYPE: TypeAlias = Pool
 
 
+class GameStreamReconnect(Exception):
+    """Raised when an active game stream should be reopened."""
+
+
+def is_play_game_final(exception: Exception) -> bool:
+    """Determine if `play_game` should stop retrying."""
+    if stop.force_quit:
+        return True
+    if (isinstance(exception, HTTPError)
+            and exception.response is not None
+            and exception.response.status_code == 429):
+        return False
+    return isinstance(exception, GameStreamReconnect) or lichess.is_final(exception)
+
+
 class PlayGameArgsType(TypedDict, total=False):
     """Type hint for `play_game_args`."""
 
@@ -125,13 +140,24 @@ def watch_control_stream(control_queue: CONTROL_QUEUE_TYPE, li: lichess.Lichess)
     while not stop.terminated:
         try:
             with li.get_event_stream() as response:
-                lines = response.iter_lines()
+                lines = response.iter_lines(chunk_size=1)
                 for line in lines:
                     if line:
                         event = json.loads(line.decode("utf-8"))
                         control_queue.put_nowait(event)
                     else:
                         control_queue.put_nowait({"type": "ping"})
+        except lichess.RateLimitedError as exception:
+            logger.warning(exception)
+            time.sleep(max(1.0, to_seconds(exception.timeout)))
+        except HTTPError as exception:
+            if exception.response is not None and exception.response.status_code == 429:
+                timeout = li.rate_limit_time_left(lichess.ENDPOINTS["stream_event"])
+                logger.warning(f"Control stream is rate limited; reconnecting after {timeout}.")
+                time.sleep(max(1.0, to_seconds(timeout)))
+            else:
+                logger.warning(f"Control stream error, reconnecting:\n{traceback.format_exc()}")
+                time.sleep(1)
         except Exception:
             logger.warning(f"Control stream error, reconnecting:\n{traceback.format_exc()}")
             time.sleep(1)
@@ -376,6 +402,7 @@ def lichess_bot_main(li: lichess.Lichess,
                     for game in all_games
                     if game["gameId"] not in startup_correspondence_games}
     low_time_games: list[GameType] = []
+    running_games: set[str] = set()
 
     last_check_online_time = Timer(hours(1))
     matchmaker = matchmaking.Matchmaking(li, config, user_profile)
@@ -411,6 +438,7 @@ def lichess_bot_main(li: lichess.Lichess,
 
             if event["type"] == "local_game_done":
                 active_games.discard(event["game"]["id"])
+                running_games.discard(event["game"]["id"])
                 matchmaker.game_done()
                 log_proc_count("Freed", active_games)
                 one_game_completed = True
@@ -442,6 +470,7 @@ def lichess_bot_main(li: lichess.Lichess,
                     one_game_stopping = True
             elif event["type"] == "challengeCanceled":
                 active_games.discard(event["challenge"]["id"])
+                running_games.discard(event["challenge"]["id"])
                 log_proc_count("Freed", active_games)
                 if direct_challenge_id and event["challenge"]["id"] == direct_challenge_id:
                     logger.info(f"Direct challenge id {direct_challenge_id} was canceled.")
@@ -457,6 +486,7 @@ def lichess_bot_main(li: lichess.Lichess,
                            startup_correspondence_games,
                            correspondence_queue,
                            active_games,
+                           running_games,
                            low_time_games)
             elif event["type"] == "gameFinish":
                 rating_diff = rating_diff_from_game_finish(event)
@@ -474,13 +504,14 @@ def lichess_bot_main(li: lichess.Lichess,
                                      f"game rating delta {rating_diff:+d} Elo <= -{max_rating_loss}. "
                                      "No new games will be accepted or created.")
 
-            start_low_time_games(low_time_games, active_games, max_games, pool, play_game_args)
+            start_low_time_games(low_time_games, active_games, running_games, max_games, pool, play_game_args)
             check_in_on_correspondence_games(pool,
                                              event,
                                              correspondence_queue,
                                              challenge_queue,
                                              play_game_args,
                                              active_games,
+                                             running_games,
                                              max_games)
             if not one_game_stopping:
                 if direct_challenge:
@@ -557,6 +588,7 @@ def check_in_on_correspondence_games(pool: POOL_TYPE,
                                      challenge_queue: MULTIPROCESSING_LIST_TYPE,
                                      play_game_args: PlayGameArgsType,
                                      active_games: set[str],
+                                     running_games: set[str],
                                      max_games: int) -> None:
     """Start correspondence games."""
     global correspondence_games_to_start
@@ -573,16 +605,16 @@ def check_in_on_correspondence_games(pool: POOL_TYPE,
         game_id = correspondence_queue.get_nowait()
         correspondence_games_to_start -= 1
         correspondence_queue.task_done()
-        start_game_thread(active_games, game_id, play_game_args, pool)
+        start_game_thread(active_games, running_games, game_id, play_game_args, pool)
 
 
-def start_low_time_games(low_time_games: list[GameType], active_games: set[str], max_games: int,
+def start_low_time_games(low_time_games: list[GameType], active_games: set[str], running_games: set[str], max_games: int,
                          pool: POOL_TYPE, play_game_args: PlayGameArgsType) -> None:
     """Start the games based on how much time we have left."""
     low_time_games.sort(key=lambda g: g.get("secondsLeft", math.inf))
     while low_time_games and len(active_games) < max_games:
         game_id = low_time_games.pop(0)["id"]
-        start_game_thread(active_games, game_id, play_game_args, pool)
+        start_game_thread(active_games, running_games, game_id, play_game_args, pool)
 
 
 def accept_challenges(li: lichess.Lichess, challenge_queue: MULTIPROCESSING_LIST_TYPE, active_games: set[str],
@@ -639,9 +671,27 @@ def game_is_active(li: lichess.Lichess, game_id: str) -> bool:
     return game_id in (ongoing_game["gameId"] for ongoing_game in active_games)
 
 
-def start_game_thread(active_games: set[str], game_id: str, play_game_args: PlayGameArgsType, pool: POOL_TYPE) -> None:
+def should_reconnect_game_stream(li: lichess.Lichess,
+                                 game: model.Game,
+                                 exception: BaseException,
+                                 quit_after_all_games_finish: bool) -> bool:
+    """Determine if a failed game stream should be reopened."""
+    if stop.force_quit or (stop.terminated and not quit_after_all_games_finish):
+        return False
+    if is_game_over(game):
+        return False
+    return not isinstance(exception, StopIteration) or game_is_active(li, game.id)
+
+
+def start_game_thread(active_games: set[str], running_games: set[str], game_id: str, play_game_args: PlayGameArgsType,
+                      pool: POOL_TYPE) -> None:
     """Start a game thread."""
+    if game_id in running_games:
+        logger.warning(f"Ignoring duplicate gameStart for already running game {game_id}.")
+        return
+
     active_games.add(game_id)
+    running_games.add(game_id)
     log_proc_count("Used", active_games)
     play_game_args["game_id"] = game_id
 
@@ -669,6 +719,7 @@ def start_game(event: EventType,
                startup_correspondence_games: list[str],
                correspondence_queue: CORRESPONDENCE_QUEUE_TYPE,
                active_games: set[str],
+               running_games: set[str],
                low_time_games: list[GameType]) -> None:
     """
     Start a game.
@@ -680,6 +731,7 @@ def start_game(event: EventType,
     :param startup_correspondence_games: A list of correspondence games that have to be started.
     :param correspondence_queue: The queue that correspondence games are added to, to be started.
     :param active_games: A set of all the games that aren't correspondence games.
+    :param running_games: A set of games that already have a worker.
     :param low_time_games: A list of games, in which we don't have much time remaining.
     """
     game_id = event["game"]["id"]
@@ -692,7 +744,7 @@ def start_game(event: EventType,
             low_time_games.append(event["game"])
         startup_correspondence_games.remove(game_id)
     else:
-        start_game_thread(active_games, game_id, play_game_args, pool)
+        start_game_thread(active_games, running_games, game_id, play_game_args, pool)
 
 
 def enough_time_to_queue(event: EventType, config: Configuration) -> bool:
@@ -738,17 +790,17 @@ def handle_challenge(event: EventType, li: lichess.Lichess, challenge_queue: MUL
         li.decline_challenge(chlng.id, reason=decline_reason)
 
 
-@backoff.on_exception(backoff.expo, BaseException, max_time=600, giveup=lichess.is_final,  # type: ignore[arg-type]
+@backoff.on_exception(backoff.expo, BaseException, max_time=600, giveup=is_play_game_final,  # type: ignore[arg-type]
                       on_backoff=lichess.backoff_handler)
-def play_game(li: lichess.Lichess,
-              game_id: str,
-              control_queue: CONTROL_QUEUE_TYPE,
-              user_profile: UserProfileType,
-              config: Configuration,
-              challenge_queue: MULTIPROCESSING_LIST_TYPE,
-              correspondence_queue: CORRESPONDENCE_QUEUE_TYPE,
-              logging_queue: LOGGING_QUEUE_TYPE,
-              pgn_queue: PGN_QUEUE_TYPE) -> None:
+def _play_game_once(li: lichess.Lichess,
+                    game_id: str,
+                    control_queue: CONTROL_QUEUE_TYPE,
+                    user_profile: UserProfileType,
+                    config: Configuration,
+                    challenge_queue: MULTIPROCESSING_LIST_TYPE,
+                    correspondence_queue: CORRESPONDENCE_QUEUE_TYPE,
+                    logging_queue: LOGGING_QUEUE_TYPE,
+                    pgn_queue: PGN_QUEUE_TYPE) -> None:
     """
     Play a game.
 
@@ -766,7 +818,7 @@ def play_game(li: lichess.Lichess,
     logger = logging.getLogger(__name__)
 
     with li.get_game_stream(game_id) as response:
-        lines = response.iter_lines()
+        lines = response.iter_lines(chunk_size=1)
 
         # Initial response of stream will be the full game info. Store it.
         initial_state = json.loads(next(lines).decode("utf-8"))
@@ -812,7 +864,6 @@ def play_game(li: lichess.Lichess,
             quit_after_all_games_finish = config.quit_after_all_games_finish
             stay_in_game = True
             while stay_in_game and (not stop.terminated or quit_after_all_games_finish) and not stop.force_quit:
-                move_attempted = False
                 try:
                     upd = next_update(game_stream)
                     u_type = upd["type"] if upd else "ping"
@@ -828,7 +879,6 @@ def play_game(li: lichess.Lichess,
                             say_hello(conversation, hello, hello_spectators, board)
                             setup_timer = Timer()
                             print_move_number(board)
-                            move_attempted = True
                             engine.play_move(board,
                                              game,
                                              li,
@@ -861,8 +911,10 @@ def play_game(li: lichess.Lichess,
                         stay_in_game = False
                 except (HTTPError, ReadTimeout, RemoteDisconnected, ChunkedEncodingError, RequestsConnectionError,
                         StopIteration) as e:
-                    stopped = isinstance(e, StopIteration)
-                    stay_in_game = not stopped and (move_attempted or game_is_active(li, game.id))
+                    if should_reconnect_game_stream(li, game, e, quit_after_all_games_finish):
+                        logger.warning(f"Game stream for {game.url()} interrupted; reconnecting.")
+                        raise GameStreamReconnect(game.id) from e
+                    stay_in_game = False
 
             pgn_record = try_get_pgn_game_record(li, config, game, board, engine) if config.save_pgn else ""
             if is_game_over(game) and maybe_notify_game:
@@ -872,6 +924,34 @@ def play_game(li: lichess.Lichess,
                     pass
         final_queue_entries(control_queue, correspondence_queue, game, is_correspondence, pgn_record, pgn_queue)
         delete_takeback_record(game)
+
+
+def play_game(li: lichess.Lichess,
+              game_id: str,
+              control_queue: CONTROL_QUEUE_TYPE,
+              user_profile: UserProfileType,
+              config: Configuration,
+              challenge_queue: MULTIPROCESSING_LIST_TYPE,
+              correspondence_queue: CORRESPONDENCE_QUEUE_TYPE,
+              logging_queue: LOGGING_QUEUE_TYPE,
+              pgn_queue: PGN_QUEUE_TYPE) -> None:
+    """Play a game, reopening the game stream after transient disconnects."""
+    while True:
+        try:
+            _play_game_once(li,
+                            game_id,
+                            control_queue,
+                            user_profile,
+                            config,
+                            challenge_queue,
+                            correspondence_queue,
+                            logging_queue,
+                            pgn_queue)
+            return
+        except GameStreamReconnect:
+            if stop.force_quit or (stop.terminated and not config.quit_after_all_games_finish):
+                return
+            logging.getLogger(__name__).warning(f"Reopening game stream for {game_id}.")
 
 
 def read_takeback_record(game: model.Game) -> int:
