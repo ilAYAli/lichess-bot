@@ -385,7 +385,6 @@ def lichess_bot_main(li: lichess.Lichess,
     """
     max_games = config.challenge.concurrency
 
-    one_game_completed = False
     one_game_stopping = False
     rating_loss_guard_triggered = False
     session_rating_delta = 0
@@ -441,7 +440,6 @@ def lichess_bot_main(li: lichess.Lichess,
                 running_games.discard(event["game"]["id"])
                 matchmaker.game_done()
                 log_proc_count("Freed", active_games)
-                one_game_completed = True
                 if one_game:
                     one_game_stopping = True
             elif event["type"] == "challenge":
@@ -826,9 +824,10 @@ def _play_game_once(li: lichess.Lichess,
         abort_time = seconds(config.abort_time)
         game = model.Game(initial_state, user_profile["username"], li.baseUrl, abort_time)
 
+        game_log_path = get_game_log_path(config, game)
         with engine_wrapper.create_engine(config, game) as engine:
-            game_log_path = get_game_log_path(config, game)
             if game_log_path:
+                preserve_existing_game_log(game_log_path)
                 os.makedirs(os.path.dirname(game_log_path), exist_ok=True)
                 engine.configure({"logfile": game_log_path}, game)
             engine.get_opponent_info(game)
@@ -922,6 +921,7 @@ def _play_game_once(li: lichess.Lichess,
                     maybe_notify_game(game, pgn_record)
                 except Exception:
                     pass
+        move_game_log_to_result_directory(game_log_path, game)
         final_queue_entries(control_queue, correspondence_queue, game, is_correspondence, pgn_record, pgn_queue)
         delete_takeback_record(game)
 
@@ -1267,8 +1267,123 @@ def get_game_log_path(config: Configuration, game: model.Game) -> str | None:
     if not config.pgn_directory:
         return None
 
-    game_path = get_game_file_path(config, game.id, game.white.name, game.black.name, game.me.name, is_game_over(game), force_single=True)
-    return f"{os.path.splitext(game_path)[0]}.log"
+    game_path = get_game_file_path(config, game.id, game.white.name, game.black.name, game.me.name,
+                                   is_game_over(game), force_single=True)
+    log_name = f"{os.path.splitext(os.path.basename(game_path))[0]}.log"
+    return os.path.join(config.pgn_directory, active_game_log_directory, log_name)
+
+
+def game_log_fragment_path(game_log_path: str) -> str:
+    """Return an unused path for a preserved partial game log."""
+    for index in itertools.count(1):
+        fragment_path = f"{game_log_path}.part{index}"
+        if not os.path.exists(fragment_path):
+            return fragment_path
+    raise RuntimeError("unreachable")
+
+
+def game_log_fragment_paths(game_log_path: str) -> list[str]:
+    """Return preserved partial game logs in replay order."""
+    fragments = glob.glob(f"{game_log_path}.part*")
+    return sorted(fragments, key=lambda path: int(path.rsplit(".part", 1)[1]))
+
+
+def preserve_existing_game_log(game_log_path: str) -> None:
+    """Keep an existing active log before a reconnect can reopen and truncate it."""
+    if not os.path.exists(game_log_path):
+        return
+
+    if os.path.getsize(game_log_path) == 0:
+        with contextlib.suppress(OSError):
+            os.remove(game_log_path)
+        return
+
+    fragment_path = game_log_fragment_path(game_log_path)
+    os.replace(game_log_path, fragment_path)
+    logger.info(f"Preserved partial game log at {fragment_path}")
+
+
+def merge_game_log_fragments(game_log_path: str) -> str | None:
+    """Merge preserved partial active logs with the current active log."""
+    fragments = game_log_fragment_paths(game_log_path)
+    current_log_exists = os.path.exists(game_log_path)
+    current_log_has_content = current_log_exists and os.path.getsize(game_log_path) > 0
+    parts = [*fragments]
+    if current_log_has_content:
+        parts.append(game_log_path)
+
+    if not parts:
+        return game_log_path if current_log_exists else None
+
+    merged_path = f"{game_log_path}.merged"
+    with open(merged_path, "wb") as merged:
+        for part in parts:
+            with open(part, "rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    merged.write(chunk)
+
+    for part in fragments:
+        with contextlib.suppress(OSError):
+            os.remove(part)
+    if current_log_exists:
+        with contextlib.suppress(OSError):
+            os.remove(game_log_path)
+
+    os.replace(merged_path, game_log_path)
+    return game_log_path
+
+
+def game_result_directory(game: model.Game) -> str | None:
+    """Return the result directory for a completed game from the bot's perspective."""
+    result = game.result()
+    if result == "1/2-1/2":
+        return "draw"
+    if result == "*":
+        return None
+    return "win" if (result == "1-0") == game.is_white else "loss"
+
+
+def move_game_log_to_result_directory(game_log_path: str | None, game: model.Game) -> str | None:
+    """Move a completed game log into logs/win, logs/draw, or logs/loss."""
+    if not game_log_path:
+        return None
+
+    result_directory = game_result_directory(game)
+    if result_directory is None:
+        return None
+
+    game_log_path = merge_game_log_fragments(game_log_path)
+    if not game_log_path or not os.path.exists(game_log_path):
+        return None
+    if os.path.getsize(game_log_path) == 0:
+        with contextlib.suppress(OSError):
+            os.remove(game_log_path)
+        logger.warning("Skipping empty game log; no engine search output was written.")
+        return None
+
+    source_directory = os.path.dirname(game_log_path)
+    if os.path.basename(source_directory) == active_game_log_directory:
+        log_directory = os.path.dirname(source_directory)
+    else:
+        log_directory = source_directory
+    target_directory = os.path.join(log_directory, result_directory)
+    target_path = os.path.join(target_directory, os.path.basename(game_log_path))
+    os.makedirs(target_directory, exist_ok=True)
+    os.replace(game_log_path, target_path)
+    remove_empty_top_level_game_log_duplicate(log_directory, target_path)
+    logger.info(f"Moved game log to {target_path}")
+    return target_path
+
+
+def remove_empty_top_level_game_log_duplicate(log_directory: str, target_path: str) -> None:
+    """Remove a stale empty logs/foo.log when logs/win/foo.log now holds the completed log."""
+    duplicate_path = os.path.join(log_directory, os.path.basename(target_path))
+    if duplicate_path == target_path:
+        return
+
+    with contextlib.suppress(OSError):
+        if os.path.isfile(duplicate_path) and os.path.getsize(duplicate_path) == 0:
+            os.remove(duplicate_path)
 
 
 def fill_missing_pgn_headers(game_record: chess.pgn.Game, game: model.Game) -> None:
@@ -1369,6 +1484,7 @@ def intro() -> str:
 
 
 auto_log_directory = "lichess_bot_auto_logs"
+active_game_log_directory = ".active"
 
 
 def log_python_and_libraries() -> None:

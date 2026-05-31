@@ -9,6 +9,7 @@ import datetime
 import time
 import logging
 import tempfile
+from types import SimpleNamespace
 from multiprocessing import Manager
 from queue import Queue
 from unittest.mock import Mock
@@ -245,3 +246,97 @@ def test_buggy_engine() -> None:
         time.sleep(0.1)  # Wait for file to be written.
         assert os.path.isfile(os.path.join(CONFIG["pgn_directory"],
                                            "bo_vs_b_zzzzzzzz.pgn"))
+
+
+def test_move_game_log_to_result_directory() -> None:
+    """Test that completed game logs are moved to result subdirectories."""
+    with tempfile.TemporaryDirectory() as temp:
+        cases = [
+            ("1-0", True, "win"),
+            ("0-1", True, "loss"),
+            ("1/2-1/2", False, "draw"),
+        ]
+        for index, (result, is_white, result_directory) in enumerate(cases):
+            game_log_path = os.path.join(temp, f"white_vs_black_gameid_{index}.log")
+            with open(game_log_path, "w") as game_log:
+                game_log.write("log\n")
+
+            game = SimpleNamespace(result=lambda result=result: result, is_white=is_white)
+            target_path = lichess_bot.move_game_log_to_result_directory(game_log_path, game)
+
+            assert target_path == os.path.join(temp, result_directory, f"white_vs_black_gameid_{index}.log")
+            assert os.path.isfile(target_path)
+            assert not os.path.exists(game_log_path)
+
+
+def test_move_active_game_log_to_result_directory() -> None:
+    """Test that completed active logs are moved under the top-level log directory."""
+    with tempfile.TemporaryDirectory() as temp:
+        active_directory = os.path.join(temp, ".active")
+        os.makedirs(active_directory, exist_ok=True)
+        game_log_path = os.path.join(active_directory, "white_vs_black_gameid.log")
+        with open(game_log_path, "w") as game_log:
+            game_log.write("log\n")
+
+        duplicate_path = os.path.join(temp, "white_vs_black_gameid.log")
+        open(duplicate_path, "w").close()
+
+        game = SimpleNamespace(result=lambda: "1-0", is_white=True)
+        target_path = lichess_bot.move_game_log_to_result_directory(game_log_path, game)
+
+        assert target_path == os.path.join(temp, "win", "white_vs_black_gameid.log")
+        assert os.path.isfile(target_path)
+        assert not os.path.exists(game_log_path)
+        assert not os.path.exists(duplicate_path)
+
+
+def test_move_active_game_log_merges_reconnect_fragments() -> None:
+    """Test that reconnect-preserved active logs are merged into the final result log."""
+    with tempfile.TemporaryDirectory() as temp:
+        active_directory = os.path.join(temp, ".active")
+        os.makedirs(active_directory, exist_ok=True)
+        game_log_path = os.path.join(active_directory, "white_vs_black_gameid.log")
+        with open(game_log_path, "w") as game_log:
+            game_log.write("first\n")
+        lichess_bot.preserve_existing_game_log(game_log_path)
+        with open(game_log_path, "w") as game_log:
+            game_log.write("second\n")
+
+        game = SimpleNamespace(result=lambda: "1-0", is_white=True)
+        target_path = lichess_bot.move_game_log_to_result_directory(game_log_path, game)
+
+        assert target_path == os.path.join(temp, "win", "white_vs_black_gameid.log")
+        with open(target_path) as target_log:
+            assert target_log.read() == "first\nsecond\n"
+        assert not os.path.exists(game_log_path)
+        assert not os.path.exists(f"{game_log_path}.part1")
+
+
+def test_move_active_game_log_drops_empty_completed_logs() -> None:
+    """Test that empty active logs are removed instead of moved to result directories."""
+    with tempfile.TemporaryDirectory() as temp:
+        active_directory = os.path.join(temp, ".active")
+        os.makedirs(active_directory, exist_ok=True)
+        game_log_path = os.path.join(active_directory, "white_vs_black_gameid.log")
+        open(game_log_path, "w").close()
+
+        game = SimpleNamespace(result=lambda: "1-0", is_white=True)
+        target_path = lichess_bot.move_game_log_to_result_directory(game_log_path, game)
+
+        assert target_path is None
+        assert not os.path.exists(game_log_path)
+        assert not os.path.exists(os.path.join(temp, "win", "white_vs_black_gameid.log"))
+
+
+def test_move_game_log_to_result_directory_keeps_incomplete_logs() -> None:
+    """Test that unfinished game logs stay in the top-level log directory."""
+    with tempfile.TemporaryDirectory() as temp:
+        game_log_path = os.path.join(temp, "white_vs_black_gameid.log")
+        with open(game_log_path, "w") as game_log:
+            game_log.write("log\n")
+
+        game = SimpleNamespace(result=lambda: "*", is_white=True)
+        target_path = lichess_bot.move_game_log_to_result_directory(game_log_path, game)
+
+        assert target_path is None
+        assert os.path.isfile(game_log_path)
