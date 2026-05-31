@@ -99,6 +99,7 @@ class EngineWrapper:
         self.go_commands = Configuration(cast(GO_COMMANDS_TYPE, options.pop("go_commands", {})) or {})
         self.move_commentary: list[InfoStrDict] = []
         self.comment_start_index = -1
+        self.game: model.Game | None = None
 
     def configure(self, options: OPTIONS_GO_EGTB_TYPE, game: model.Game | None) -> None:
         """
@@ -159,6 +160,7 @@ class EngineWrapper:
         online_moves_cfg = engine_cfg.online_moves
         draw_or_resign_cfg = engine_cfg.draw_or_resign
         lichess_bot_tbs = engine_cfg.lichess_bot_tbs
+        self.game = game
 
         best_move: MOVE
         best_move = get_book_move(board, game, polyglot_cfg)
@@ -228,8 +230,33 @@ class EngineWrapper:
         draw_score_range: int = self.draw_or_resign.offer_draw_score
         draw_max_piece_count = self.draw_or_resign.offer_draw_pieces
         pieces_on_board = chess.popcount(board.occupied)
-        enough_pieces_captured = pieces_on_board <= draw_max_piece_count
-        if can_offer_draw and len(self.scores) >= draw_offer_moves and enough_pieces_captured:
+        enough_pieces_for_offer = pieces_on_board <= draw_max_piece_count
+
+        can_accept_draw = self.draw_or_resign.accept_draw_enabled
+        if can_accept_draw and self.game and check_for_draw_offer(self.game):
+            accept_draw_moves = self.draw_or_resign.accept_draw_moves
+            accept_draw_score = self.draw_or_resign.accept_draw_score
+            accept_draw_max_piece_count = self.draw_or_resign.accept_draw_pieces
+            accept_draw_min_rating_diff = self.draw_or_resign.accept_draw_min_rating_diff
+            enough_scores = len(self.scores) >= accept_draw_moves
+            enough_pieces_for_accept = pieces_on_board <= accept_draw_max_piece_count
+            rating_diff = None
+            if self.game.me.rating is not None and self.game.opponent.rating is not None:
+                rating_diff = self.game.opponent.rating - self.game.me.rating
+            acceptable_rating = (rating_diff is not None
+                                 and (accept_draw_min_rating_diff is None
+                                      or rating_diff >= accept_draw_min_rating_diff))
+            if enough_scores and enough_pieces_for_accept and acceptable_rating:
+                scores = self.scores[-accept_draw_moves:]
+
+                def score_not_clearly_winning(score: chess.engine.PovScore) -> bool:
+                    return actual(score) <= accept_draw_score
+                if len(scores) == len(list(filter(score_not_clearly_winning, scores))):
+                    result.draw_offered = True
+                    logger.info(f"Accepting draw offer: opponent rating diff {rating_diff:+d}, "
+                                f"score {actual(scores[-1])}cp.")
+
+        if can_offer_draw and len(self.scores) >= draw_offer_moves and enough_pieces_for_offer:
             scores = self.scores[-draw_offer_moves:]
 
             def score_near_draw(score: chess.engine.PovScore) -> bool:
