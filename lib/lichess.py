@@ -190,7 +190,7 @@ class Lichess:
 
         if is_new_rate_limit(response):
             delay = seconds(1 if endpoint_name == "move" else 60)
-            self.set_rate_limit_delay(path_template, delay)
+            self.set_rate_limit_delay(path_template, delay, "default cooldown")
 
         response.raise_for_status()
         response.encoding = "utf-8"
@@ -275,7 +275,7 @@ class Lichess:
             return self.handle_challenge(response)
 
         if is_new_rate_limit(response):
-            self.set_rate_limit_delay(path_template, seconds(60))
+            self.set_rate_limit_delay(path_template, seconds(60), "default cooldown")
 
         if raise_for_status:
             response.raise_for_status()
@@ -305,7 +305,7 @@ class Lichess:
         if bot_is_rate_limited or opponent_is_rate_limited:
             delay = cast(datetime.timedelta, get_challenge_timeout(challenge_response))
             if bot_is_rate_limited:
-                self.set_rate_limit_delay(ENDPOINTS["challenge"], delay)
+                self.set_rate_limit_delay(ENDPOINTS["challenge"], delay, "Lichess ratelimit.seconds")
             challenge_response["bot_is_rate_limited"] = bot_is_rate_limited
             challenge_response["opponent_is_rate_limited"] = opponent_is_rate_limited
             challenge_response["rate_limit_timeout"] = delay
@@ -324,7 +324,7 @@ class Lichess:
             if delay is None:
                 delay = self.challenge_rate_limit_backoff
                 self.challenge_rate_limit_backoff = min(seconds(600), self.challenge_rate_limit_backoff * 2)
-            self.set_rate_limit_delay(ENDPOINTS["challenge"], delay)
+            self.set_rate_limit_delay(ENDPOINTS["challenge"], delay, "local exponential backoff")
             challenge_response["bot_is_rate_limited"] = True
             challenge_response["opponent_is_rate_limited"] = False
             challenge_response["rate_limit_timeout"] = delay
@@ -334,14 +334,20 @@ class Lichess:
 
         return challenge_response
 
-    def set_rate_limit_delay(self, path_template: str, delay_time: datetime.timedelta) -> None:
+    def set_rate_limit_delay(self, path_template: str, delay_time: datetime.timedelta,
+                             delay_source: str = "default cooldown") -> None:
         """
         Set a delay to a path template if it was rate limited.
 
         :param path_template: The path template.
         :param delay_time: How long we won't call this endpoint.
+        :param delay_source: Where the delay came from.
         """
-        logger.warning(f"Endpoint {path_template} is rate limited. Waiting {sec_str(delay_time)} seconds until next request.")
+        expires_at = datetime.datetime.now().astimezone() + delay_time
+        logger.warning(
+            f"Endpoint {path_template} is rate limited. Waiting {sec_str(delay_time)} seconds "
+            f"({delay_source}) until next request attempt after {expires_at.strftime('%c %Z')}."
+        )
         self.rate_limit_timers[path_template] = Timer(delay_time)
 
     def is_rate_limited(self, path_template: str) -> bool:

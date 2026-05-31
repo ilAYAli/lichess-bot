@@ -109,12 +109,27 @@ def test_challenge_rating_filters() -> None:
     CONFIG["challenge"]["min_rating"] = 2500
     assert challenge_model.is_supported(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
         False, "generic")
+    assert challenge_model.decline_detail(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
+        "rating 2000 below minimum 2500")
 
     # Test rating_difference filter (bot is 3000, challenger is 2000, diff is 1000)
     CONFIG["challenge"]["min_rating"] = 0
     CONFIG["challenge"]["rating_difference"] = 500
     assert challenge_model.is_supported(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
         False, "generic")
+    assert challenge_model.decline_detail(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
+        "rating 2000 below minimum 2500 for own bullet rating 3000")
+
+    # Casual human challenges can ignore rating without doing the same for casual bot challenges.
+    CONFIG["challenge"]["ignore_casual_human_rating"] = True
+    assert challenge_model.is_supported(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
+        True, "")
+    assert challenge_model.rating_decline_detail(configuration, user_profile) == ""
+    bot_challenge: ChallengeType = {**challenge, "challenger": {**challenge["challenger"], "title": "BOT"}}
+    bot_challenge_model = model.Challenge(bot_challenge, user_profile)
+    assert bot_challenge_model.is_supported(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
+        False, "generic")
+    CONFIG["challenge"]["ignore_casual_human_rating"] = False
 
     # Rating difference large enough to accept
     CONFIG["challenge"]["rating_difference"] = 1500
@@ -129,7 +144,16 @@ def test_challenge_rating_filters() -> None:
     assert challenge_model.is_supported(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
         False, "generic")
 
+    # Test that rating_difference can allow higher-rated challenges
+    CONFIG["challenge"]["rating_difference_allow_higher"] = True
+    high_rated_challenge: ChallengeType = {**challenge,
+                                           "challenger": {**challenge["challenger"], "rating": 3500}}
+    high_rated_challenge_model = model.Challenge(high_rated_challenge, user_profile)
+    supported = high_rated_challenge_model.is_supported(configuration, recent_challenges, Counter(), online_block_list, user_profile)
+    assert supported == (True, "")
+
     # Test with AI opponent (no rating) - should always accept
+    CONFIG["challenge"]["rating_difference_allow_higher"] = False
     CONFIG["challenge"]["rating_difference"] = None
     CONFIG["challenge"]["max_rating"] = 1000
     ai_challenge: ChallengeType = {**challenge,
