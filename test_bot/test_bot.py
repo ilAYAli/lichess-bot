@@ -139,7 +139,7 @@ def test_uci() -> None:
         assert win
         time.sleep(0.1)  # Wait for file to be written.
         assert os.path.isfile(os.path.join(CONFIG["pgn_directory"],
-                                           "bo vs b - zzzzzzzz.pgn"))
+                                           "bo_vs_b_zzzzzzzz.pgn"))
 
 
 def test_xboard() -> None:
@@ -159,7 +159,7 @@ def test_xboard() -> None:
         assert win
         time.sleep(0.1)  # Wait for file to be written.
         assert os.path.isfile(os.path.join(CONFIG["pgn_directory"],
-                                           "bo vs b - zzzzzzzz.pgn"))
+                                           "bo_vs_b_zzzzzzzz.pgn"))
 
 
 def test_homemade() -> None:
@@ -177,7 +177,7 @@ def test_homemade() -> None:
         assert win
         time.sleep(0.1)  # Wait for file to be written.
         assert os.path.isfile(os.path.join(CONFIG["pgn_directory"],
-                                           "bo vs b - zzzzzzzz.pgn"))
+                                           "bo_vs_b_zzzzzzzz.pgn"))
 
 
 @pytest.mark.parametrize("lichess_class", [test_bot.lichess.LichessWithDroppedGameStream,
@@ -213,4 +213,4 @@ def test_buggy_engine() -> None:
         assert win
         time.sleep(0.1)  # Wait for file to be written.
         assert os.path.isfile(os.path.join(CONFIG["pgn_directory"],
-                                           "bo vs b - zzzzzzzz.pgn"))
+                                           "bo_vs_b_zzzzzzzz.pgn"))
