@@ -370,6 +370,17 @@ class EngineWrapper:
             str_score = str(round(cp_score / 100, 2))
         return str_score
 
+    def readable_tablebase_status(self, info_string: str) -> str | None:
+        """Convert Enyo tablebase root markers into readable status text."""
+        parts = info_string.split()
+        if len(parts) >= 2 and parts[0] == "tbhit" and parts[1] in {"win", "draw", "loss"}:
+            status = f"TB {parts[1]}"
+            with contextlib.suppress(ValueError, IndexError):
+                dtz_index = parts.index("dtz")
+                status = f"{status} DTZ {parts[dtz_index + 1]}"
+            return status
+        return None
+
     def readable_wdl(self, wdl: chess.engine.PovWdl) -> str:
         """Convert the WDL score to a percentage, so it is more human-readable."""
         wdl_percentage = round(wdl.relative.expectation() * 100, 1)
@@ -403,6 +414,9 @@ class EngineWrapper:
         def identity(x: InfoDictValue) -> str:
             return str(x)
 
+        if stat == "Evaluation" and isinstance(info[stat], str):
+            return cast(str, info[stat])
+
         func = cast(Callable[[InfoDictValue], str], readable.get(stat, identity))
         return str(func(info[stat]))
 
@@ -413,7 +427,8 @@ class EngineWrapper:
         :param for_chat: Whether the stats will be sent to the game chat, which has a 140 character limit.
         """
         can_index = self.move_commentary and self.move_commentary[-1]
-        info: InfoStrDict = self.move_commentary[-1].copy() if can_index else {}
+        raw_info: InfoStrDict = self.move_commentary[-1].copy() if can_index else {}
+        info: InfoStrDict = raw_info.copy()
 
         def to_readable_item(stat: InfoDictKeys, value: InfoDictValue) -> tuple[InfoDictKeys, InfoDictValue]:
             readable = {"wdl": "winrate", "ponderpv": "PV", "nps": "speed", "score": "evaluation", "time": "movetime"}
@@ -425,6 +440,13 @@ class EngineWrapper:
 
         info = cast(InfoStrDict, dict(to_readable_item(cast(InfoDictKeys, key), cast(InfoDictValue, value))
                                       for (key, value) in info.items()))
+        tablebase_string = raw_info.get("string")
+        tablebase_status = self.readable_tablebase_status(tablebase_string) if isinstance(tablebase_string, str) else None
+        if tablebase_status:
+            info["Source"] = "Tablebase"
+            score = raw_info.get("score")
+            if not (isinstance(score, chess.engine.PovScore) and score.relative.mate() is not None):
+                info["Evaluation"] = tablebase_status
         if "Source" not in info:
             info["Source"] = "Engine"
 
