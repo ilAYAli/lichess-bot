@@ -216,6 +216,7 @@ will precede the `go` command to start thinking with `sd 5`. The other `go_comma
   - `min_rating`: The minimum rating of the challenger to accept a challenge. The default is 0.
   - `max_rating`: The maximum rating of the challenger to accept a challenge. The maximum rating in lichess is 4000. The default is 4000.
   - `rating_difference`: The maximum difference in rating between the bot's rating and the challenger's rating. If set, this further restricts the range defined by `min_rating` and `max_rating`.
+  - `rating_difference_allow_higher`: If `rating_difference` is set, allow challengers above the bot's rating + `rating_difference`. The default is `false`.
 
 ## Greeting
 - `greeting`: Send messages via chat to the bot's opponent. The string `{me}` will be replaced by the bot's lichess account name. The string `{opponent}` will be replaced by the opponent's lichess account name. Any other word between curly brackets will be removed. If you want to put a curly bracket in the message, use two: `{{` or `}}`.

@@ -145,6 +145,10 @@ class Lichess:
         self.logging_level = logging_level
         self.max_retries = max_retries
         self.rate_limit_timers: defaultdict[str, Timer] = defaultdict(Timer)
+        # Seconds to wait on the next plain-429 for the challenge endpoint.
+        # Doubles on each consecutive 429 (capped at 600s) and resets on a
+        # successful challenge so transient 429s don't cause long stalls.
+        self.challenge_rate_limit_backoff_seconds = 60.0
 
         # Confirm that the OAuth token has the proper permission to play on lichess
         token_response = cast(TOKEN_TESTS_TYPE, self.api_post("token_test", data=token))
@@ -189,7 +193,7 @@ class Lichess:
 
         if is_new_rate_limit(response):
             delay = seconds(1 if endpoint_name == "move" else 60)
-            self.set_rate_limit_delay(path_template, delay)
+            self.set_rate_limit_delay(path_template, delay, "default cooldown")
 
         response.raise_for_status()
         response.encoding = "utf-8"
@@ -274,7 +278,7 @@ class Lichess:
             return self.handle_challenge(response)
 
         if is_new_rate_limit(response):
-            self.set_rate_limit_delay(path_template, seconds(60))
+            self.set_rate_limit_delay(path_template, seconds(60), "default cooldown")
 
         if raise_for_status:
             response.raise_for_status()
@@ -304,21 +308,51 @@ class Lichess:
         if bot_is_rate_limited or opponent_is_rate_limited:
             delay = cast(datetime.timedelta, get_challenge_timeout(challenge_response))
             if bot_is_rate_limited:
-                self.set_rate_limit_delay(ENDPOINTS["challenge"], delay)
+                self.set_rate_limit_delay(ENDPOINTS["challenge"], delay, "Lichess ratelimit.seconds")
             challenge_response["bot_is_rate_limited"] = bot_is_rate_limited
             challenge_response["opponent_is_rate_limited"] = opponent_is_rate_limited
             challenge_response["rate_limit_timeout"] = delay
+        elif is_new_rate_limit(response):
+            # Generic 429 without a ratelimit body (no bot.vsBot.day key). Honor
+            # Retry-After if lichess sent it, otherwise back off exponentially
+            # (60 → 120 → 240 → 480, capped at 600s) so repeated 429s escalate
+            # the cooldown instead of retrying at the same short interval.
+            delay = None
+            retry_after = response.headers.get("Retry-After")
+            delay_source = "local exponential backoff"
+            if retry_after:
+                try:
+                    delay = seconds(float(retry_after))
+                    delay_source = "Retry-After header"
+                except ValueError:
+                    delay = None
+            if delay is None:
+                delay = seconds(self.challenge_rate_limit_backoff_seconds)
+                self.challenge_rate_limit_backoff_seconds = min(600.0,
+                                                                self.challenge_rate_limit_backoff_seconds * 2)
+            self.set_rate_limit_delay(ENDPOINTS["challenge"], delay, delay_source)
+            challenge_response["bot_is_rate_limited"] = True
+            challenge_response["opponent_is_rate_limited"] = False
+            challenge_response["rate_limit_timeout"] = delay
+        else:
+            # Any non-429 response resets the backoff to its floor.
+            self.challenge_rate_limit_backoff_seconds = 60.0
 
         return challenge_response
 
-    def set_rate_limit_delay(self, path_template: str, delay_time: datetime.timedelta) -> None:
+    def set_rate_limit_delay(self, path_template: str, delay_time: datetime.timedelta, delay_source: str) -> None:
         """
         Set a delay to a path template if it was rate limited.
 
         :param path_template: The path template.
         :param delay_time: How long we won't call this endpoint.
+        :param delay_source: Where the delay came from.
         """
-        logger.warning(f"Endpoint {path_template} is rate limited. Waiting {sec_str(delay_time)} seconds until next request.")
+        expires_at = datetime.datetime.now().astimezone() + delay_time
+        logger.warning(
+            f"Endpoint {path_template} is rate limited. Waiting {sec_str(delay_time)} seconds "
+            f"({delay_source}) until next request attempt after {expires_at.strftime('%c %Z')}."
+        )
         self.rate_limit_timers[path_template] = Timer(delay_time)
 
     def is_rate_limited(self, path_template: str) -> bool:

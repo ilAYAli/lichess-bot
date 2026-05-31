@@ -251,7 +251,8 @@ def thread_logging_configurer(queue: LOGGING_QUEUE_TYPE) -> None:
 
 
 def start(li: lichess.Lichess, user_profile: UserProfileType, config: Configuration, logging_level: int,
-          log_filename: str | None, disable_auto_logging: bool, one_game: bool = False) -> None:
+          log_filename: str | None, disable_auto_logging: bool, one_game: bool = False,
+          direct_challenge: str | None = None) -> None:
     """
     Start lichess-bot.
 
@@ -261,7 +262,8 @@ def start(li: lichess.Lichess, user_profile: UserProfileType, config: Configurat
     :param logging_level: The logging level. Either `logging.INFO` or `logging.DEBUG`.
     :param log_filename: The filename to write the logs to. If it is `None` then the logs aren't written to a file.
     :param disable_auto_logging: Whether to disable automatic logging.
-    :param one_game: Whether the bot should play only one game. Only used in `test_bot/test_bot.py` to test lichess-bot.
+    :param one_game: Whether the bot should play only one completed game.
+    :param direct_challenge: A username to challenge once after the event stream is connected.
     """
     logger.info(f"You're now connected to {config.url} and awaiting challenges.")
     manager = multiprocessing.Manager()
@@ -301,7 +303,8 @@ def start(li: lichess.Lichess, user_profile: UserProfileType, config: Configurat
                          correspondence_queue,
                          logging_queue,
                          pgn_queue,
-                         one_game)
+                         one_game,
+                         direct_challenge)
     finally:
         control_stream.terminate()
         control_stream.join()
@@ -334,7 +337,8 @@ def lichess_bot_main(li: lichess.Lichess,
                      correspondence_queue: CORRESPONDENCE_QUEUE_TYPE,
                      logging_queue: LOGGING_QUEUE_TYPE,
                      pgn_queue: PGN_QUEUE_TYPE,
-                     one_game: bool) -> None:
+                     one_game: bool,
+                     direct_challenge: str | None) -> None:
     """
     Handle all the games and challenges.
 
@@ -346,12 +350,16 @@ def lichess_bot_main(li: lichess.Lichess,
     :param correspondence_queue: The queue containing the correspondence games.
     :param logging_queue: The logging queue. Used by `logging_listener_proc`.
     :param pgn_queue: The queue containing the PGN games.
-    :param one_game: Whether the bot should play only one game. Only used in `test_bot/test_bot.py` to test lichess-bot.
+    :param one_game: Whether the bot should play only one completed game.
+    :param direct_challenge: A username to challenge once after the event stream is connected.
     """
     max_games = config.challenge.concurrency
 
     one_game_completed = False
     one_game_stopping = False
+    direct_challenge_sent = False
+    direct_challenge_id = ""
+    direct_challenge_timer = Timer(seconds(25))
 
     all_games = li.get_ongoing_games() or []
     prune_takeback_records(all_games)
@@ -366,6 +374,8 @@ def lichess_bot_main(li: lichess.Lichess,
     last_check_online_time = Timer(hours(1))
     matchmaker = matchmaking.Matchmaking(li, config, user_profile)
     matchmaker.show_earliest_challenge_time()
+    if direct_challenge:
+        logger.info(f"Will send one direct challenge to {direct_challenge}.")
 
     play_game_args = PlayGameArgsType(li=li, control_queue=control_queue, user_profile=user_profile,
                                       config=config, challenge_queue=challenge_queue,
@@ -399,18 +409,30 @@ def lichess_bot_main(li: lichess.Lichess,
                 if one_game:
                     one_game_stopping = True
             elif event["type"] == "challenge":
-                handle_challenge(event,
-                                 li,
-                                 challenge_queue,
-                                 config.challenge,
-                                 user_profile,
-                                 recent_bot_challenges,
-                                 online_block_list)
+                if direct_challenge:
+                    chlng = model.Challenge(event["challenge"], user_profile)
+                    if not chlng.from_self:
+                        logger.info(f"Decline {chlng} while waiting for direct challenge.")
+                        li.decline_challenge(chlng.id, reason="later")
+                else:
+                    handle_challenge(event,
+                                     li,
+                                     challenge_queue,
+                                     config.challenge,
+                                     user_profile,
+                                     recent_bot_challenges,
+                                     online_block_list)
             elif event["type"] == "challengeDeclined":
                 matchmaker.declined_challenge(event)
+                if direct_challenge_id and event["challenge"]["id"] == direct_challenge_id:
+                    logger.info(f"Direct challenge id {direct_challenge_id} was declined.")
+                    one_game_stopping = True
             elif event["type"] == "challengeCanceled":
                 active_games.discard(event["challenge"]["id"])
                 log_proc_count("Freed", active_games)
+                if direct_challenge_id and event["challenge"]["id"] == direct_challenge_id:
+                    logger.info(f"Direct challenge id {direct_challenge_id} was canceled.")
+                    one_game_stopping = True
             elif event["type"] == "gameStart":
                 matchmaker.accepted_challenge(event)
                 if maybe_notify_game_start:
@@ -433,8 +455,21 @@ def lichess_bot_main(li: lichess.Lichess,
                                              active_games,
                                              max_games)
             if not one_game_stopping:
-                accept_challenges(li, challenge_queue, active_games, max_games)
-                matchmaker.challenge(active_games, challenge_queue, max_games)
+                if direct_challenge:
+                    if not direct_challenge_sent:
+                        if not active_games:
+                            direct_challenge_id = matchmaker.challenge_username(direct_challenge)
+                            direct_challenge_sent = True
+                            direct_challenge_timer.reset()
+                            if not direct_challenge_id:
+                                one_game_stopping = True
+                    elif direct_challenge_id and not active_games and direct_challenge_timer.is_expired():
+                        li.cancel(direct_challenge_id)
+                        logger.info(f"Direct challenge id {direct_challenge_id} timed out.")
+                        one_game_stopping = True
+                else:
+                    accept_challenges(li, challenge_queue, active_games, max_games)
+                    matchmaker.challenge(active_games, challenge_queue, max_games)
             check_online_status(li, user_profile, last_check_online_time)
 
             control_queue.task_done()
@@ -574,9 +609,11 @@ def start_game_thread(active_games: set[str], game_id: str, play_game_args: Play
         control_queue = play_game_args["control_queue"]
         pgn_queue = play_game_args["pgn_queue"]
         li = play_game_args["li"]
+        config = play_game_args["config"]
+        pgn = li.get_game_pgn(game_id) if config.save_pgn else ""
         control_queue.put_nowait({"type": "local_game_done", "game": {"id": game_id}})
         pgn_queue.put_nowait({"game": {"id": game_id,
-                                       "pgn": li.get_game_pgn(game_id),
+                                       "pgn": pgn,
                                        "complete": not game_is_active(li, game_id)}})
 
     pool.apply_async(play_game,
@@ -651,6 +688,12 @@ def handle_challenge(event: EventType, li: lichess.Lichess, challenge_queue: MUL
         if time_window is not None:
             recent_bot_challenges[chlng.challenger.name].append(Timer(seconds(time_window)))
     else:
+        detail = chlng.decline_detail(challenge_config,
+                                      recent_bot_challenges,
+                                      opponent_engagements,
+                                      online_block_list,
+                                      user_profile)
+        logger.info(f"Decline {chlng}: {detail}.")
         li.decline_challenge(chlng.id, reason=decline_reason)
 
 
@@ -780,7 +823,7 @@ def play_game(li: lichess.Lichess,
                     stopped = isinstance(e, StopIteration)
                     stay_in_game = not stopped and (move_attempted or game_is_active(li, game.id))
 
-            pgn_record = try_get_pgn_game_record(li, config, game, board, engine)
+            pgn_record = try_get_pgn_game_record(li, config, game, board, engine) if config.save_pgn else ""
             if is_game_over(game) and maybe_notify_game:
                 try:
                     maybe_notify_game(game, pgn_record)
@@ -1167,9 +1210,12 @@ def save_pgn_record(event: EventType, config: Configuration, user_name: str) -> 
     :param config: The user's bot configuration.
     :param user_name: The bot's name.
     """
+    if not config.save_pgn or not config.pgn_directory:
+        return
+
     pgn = event["game"]["pgn"]
     pgn_headers = chess.pgn.read_headers(io.StringIO(pgn))
-    if not config.pgn_directory or pgn_headers is None:
+    if pgn_headers is None:
         return
 
     game_id = event["game"]["id"]
@@ -1223,6 +1269,9 @@ def start_lichess_bot() -> None:
     parser.add_argument("-l", "--logfile", help="Record all console output to a log file.", default=None)
     parser.add_argument("--disable_auto_logging", action="store_true", help="Disable automatic logging.")
     parser.add_argument("--one-game", action="store_true", help="Play exactly one completed game and then exit cleanly.")
+    parser.add_argument("--challenge",
+                        metavar="USERNAME",
+                        help="Challenge one user once, then exit after that game or attempt.")
     args = parser.parse_args()
 
     logging_level = logging.DEBUG if args.v else logging.INFO
@@ -1252,7 +1301,14 @@ def start_lichess_bot() -> None:
         is_bot = upgrade_account(li)
 
     if is_bot:
-        start(li, user_profile, CONFIG, logging_level, args.logfile, args.disable_auto_logging, args.one_game)
+        start(li,
+              user_profile,
+              CONFIG,
+              logging_level,
+              args.logfile,
+              args.disable_auto_logging,
+              args.one_game or bool(args.challenge),
+              args.challenge)
     else:
         logger.error(f"{username} is not a bot account. Please upgrade it to a bot account!")
     logging.shutdown()

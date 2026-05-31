@@ -56,6 +56,8 @@ class Challenge:
     def is_supported_time_control(self, challenge_cfg: Configuration) -> bool:
         """Check whether the time control is supported."""
         speeds = challenge_cfg.time_controls
+        if not self.rated and challenge_cfg.casual_time_controls is not None:
+            speeds = challenge_cfg.casual_time_controls
         increment_max: int = challenge_cfg.max_increment
         increment_min: int = challenge_cfg.min_increment
         base_max: int = challenge_cfg.max_base
@@ -86,23 +88,119 @@ class Challenge:
         """Check whether the mode is supported."""
         return ("rated" if self.rated else "casual") in challenge_cfg.modes
 
-    def is_supported_rating(self, challenge_cfg: Configuration, user_profile: UserProfileType) -> bool:
-        """Check whether the challenger's rating is within the acceptable range."""
-        challenger_rating = self.challenger.rating
-        if challenger_rating is None:
-            return True
-
+    def rating_bounds(self, challenge_cfg: Configuration,
+                      user_profile: UserProfileType) -> tuple[int, int, int | None]:
+        """Get the acceptable rating range for this challenge."""
         min_rating: int = challenge_cfg.min_rating
         max_rating: int = challenge_cfg.max_rating
         rating_diff: int | None = challenge_cfg.rating_difference
+        bot_rating = None
 
         if rating_diff is not None:
             bot_rating = user_profile.get("perfs", {}).get(self.perf_name.lower(), {}).get("rating")
             if bot_rating:
                 min_rating = max(min_rating, bot_rating - rating_diff)
-                max_rating = min(max_rating, bot_rating + rating_diff)
+                if not challenge_cfg.rating_difference_allow_higher:
+                    max_rating = min(max_rating, bot_rating + rating_diff)
 
+        return min_rating, max_rating, bot_rating
+
+    def is_supported_rating(self, challenge_cfg: Configuration, user_profile: UserProfileType) -> bool:
+        """Check whether the challenger's rating is within the acceptable range."""
+        if (not self.rated
+                and (challenge_cfg.ignore_casual_rating
+                     or (challenge_cfg.ignore_casual_human_rating and not self.challenger.is_bot))):
+            return True
+
+        challenger_rating = self.challenger.rating
+        if challenger_rating is None:
+            return True
+
+        min_rating, max_rating, _bot_rating = self.rating_bounds(challenge_cfg, user_profile)
         return min_rating <= challenger_rating <= max_rating
+
+    def rating_decline_detail(self, challenge_cfg: Configuration, user_profile: UserProfileType) -> str:
+        """Explain why the challenger's rating is outside the accepted range."""
+        if (not self.rated
+                and (challenge_cfg.ignore_casual_rating
+                     or (challenge_cfg.ignore_casual_human_rating and not self.challenger.is_bot))):
+            return ""
+
+        challenger_rating = self.challenger.rating
+        if challenger_rating is None:
+            return ""
+
+        min_rating, max_rating, bot_rating = self.rating_bounds(challenge_cfg, user_profile)
+        if challenger_rating < min_rating:
+            bot_text = f" for own {self.perf_name.lower()} rating {bot_rating}" if bot_rating else ""
+            return f"rating {challenger_rating} below minimum {min_rating}{bot_text}"
+        if challenger_rating > max_rating:
+            bot_text = f" for own {self.perf_name.lower()} rating {bot_rating}" if bot_rating else ""
+            return f"rating {challenger_rating} above maximum {max_rating}{bot_text}"
+        return ""
+
+    def time_control_decline_detail(self, challenge_cfg: Configuration) -> str:
+        """Explain why the challenge time control is unsupported."""
+        speeds = challenge_cfg.time_controls
+        if not self.rated and challenge_cfg.casual_time_controls is not None:
+            speeds = challenge_cfg.casual_time_controls
+
+        if self.speed not in speeds:
+            return f"time control {self.speed} not in accepted controls [{', '.join(speeds)}]"
+
+        if self.base is not None and self.increment is not None:
+            if (self.challenger.is_bot
+                    and self.speed == "bullet"
+                    and challenge_cfg.bullet_requires_increment
+                    and self.increment == 0):
+                return "bot bullet challenge has zero increment"
+            clock = self.time_control.get("show", f"{self.base}+{self.increment}")
+            return (f"clock {clock} outside base [{challenge_cfg.min_base}, {challenge_cfg.max_base}] "
+                    f"or increment [{challenge_cfg.min_increment}, {challenge_cfg.max_increment}]")
+        if self.days is not None:
+            return f"correspondence days {self.days} outside [{challenge_cfg.min_days}, {challenge_cfg.max_days}]"
+        return "unlimited challenge not accepted"
+
+    def decline_detail(self, config: Configuration, recent_bot_challenges: defaultdict[str, list[Timer]],
+                       opponent_engagements: Counter[str], online_block_list: OnlineBlocklist,
+                       user_profile: UserProfileType) -> str:
+        """Return a concrete explanation for why the challenge is unsupported."""
+        try:
+            from extra_game_handlers import is_supported_extra
+
+            allowed_opponents: list[str] = list(filter(None, config.allow_list)) or [self.challenger.name]
+            rating_detail = self.rating_decline_detail(config, user_profile)
+
+            if not config.accept_bot and self.challenger.is_bot:
+                return "bot challenges are disabled"
+            if config.only_bot and not self.challenger.is_bot:
+                return "human challenges are disabled"
+            if not self.is_supported_time_control(config):
+                return self.time_control_decline_detail(config)
+            if not self.is_supported_variant(config):
+                return f"variant {self.variant} not in accepted variants [{', '.join(config.variants)}]"
+            if not self.is_supported_mode(config):
+                mode = "rated" if self.rated else "casual"
+                return f"mode {mode} not in accepted modes [{', '.join(config.modes)}]"
+            if rating_detail:
+                return rating_detail
+            if self.challenger.name in config.block_list:
+                return f"{self.challenger.name} is in challenge block_list"
+            if self.challenger.name in online_block_list:
+                return f"{self.challenger.name} is in online block list"
+            if self.challenger.name not in allowed_opponents:
+                return f"{self.challenger.name} is not in allow_list"
+            if not self.is_supported_recent(config, recent_bot_challenges):
+                return f"too many recent bot challenges from {self.challenger.name}"
+            if opponent_engagements[self.challenger.name] >= config.max_simultaneous_games_per_user:
+                return (f"too many simultaneous games with {self.challenger.name}: "
+                        f"{opponent_engagements[self.challenger.name]}/{config.max_simultaneous_games_per_user}")
+            if not is_supported_extra(self):
+                return "rejected by extra_game_handlers"
+            return "unsupported challenge"
+        except Exception:
+            logger.exception(f"Error while explaining challenge {self.id}:")
+            return "unsupported challenge"
 
     def is_supported_recent(self, config: Configuration, recent_bot_challenges: defaultdict[str, list[Timer]]) -> bool:
         """Check whether we have played a lot of games with this opponent recently. Only used when the opponent is a BOT."""

@@ -179,6 +179,8 @@ challenge:                         # Incoming challenges.
 # min_rating: 0                   # Minimum rating of the challenger to accept a challenge.
 # max_rating: 4000                # Maximum rating of the challenger to accept a challenge. The maximum rating in lichess is 4000.
 # rating_difference: 300          # Maximum rating difference between the bot and the challenger. Overrides min_rating and max_rating if set.
+# rating_difference_allow_higher: false  # If rating_difference is set, allow challengers above the bot's rating + rating_difference.
+# ignore_casual_human_rating: false # Ignore rating limits for casual games from human challengers.
   bullet_requires_increment: false # Require that bullet game challenges from bots have a non-zero increment
   max_simultaneous_games_per_user: 5  # Maximum number of simultaneous games with the same user
 
