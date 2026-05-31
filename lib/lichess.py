@@ -43,6 +43,7 @@ ENDPOINTS = {
 logger = logging.getLogger(__name__)
 
 MAX_CHAT_MESSAGE_LEN = 140  # The maximum characters in a chat message.
+STREAM_TIMEOUT_SECONDS = 120
 
 
 class MissingTokenInfoError(RuntimeError):
@@ -423,11 +424,11 @@ class Lichess:
 
     def get_event_stream(self) -> requests.models.Response:
         """Get a stream of the events (e.g. challenge, gameStart)."""
-        return self.api_get("stream_event", stream=True, timeout=15)
+        return self.api_get("stream_event", stream=True, timeout=STREAM_TIMEOUT_SECONDS)
 
     def get_game_stream(self, game_id: str) -> requests.models.Response:
         """Get  stream of the in-game events (e.g. moves by the opponent)."""
-        return self.api_get("stream", game_id, stream=True, timeout=15)
+        return self.api_get("stream", game_id, stream=True, timeout=STREAM_TIMEOUT_SECONDS)
 
     def accept_challenge(self, challenge_id: str) -> None:
         """Accept a challenge."""
