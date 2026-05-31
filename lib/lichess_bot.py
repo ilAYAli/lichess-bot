@@ -1130,10 +1130,11 @@ def get_game_file_path(config: Configuration,
     """Return the path of the file where the game record will be written."""
     def create_valid_path(s: str) -> str:
         illegal = '<>:"/\\|?*'
-        return os.path.join(config.pgn_directory, "".join(c for c in s if c not in illegal))
+        valid = "".join(c for c in s if c not in illegal)
+        return os.path.join(config.pgn_directory, "_".join(valid.split()))
 
     if config.pgn_file_grouping == "game" or not game_is_over or force_single:
-        return create_valid_path(f"{white_name} vs {black_name} - {game_id}.pgn")
+        return create_valid_path(f"{white_name} vs {black_name} {game_id}.pgn")
     elif config.pgn_file_grouping == "opponent":
         opponent_name = white_name if user_name == black_name else black_name
         return create_valid_path(f"{user_name} games vs. {opponent_name}.pgn")
