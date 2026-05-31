@@ -3,6 +3,8 @@ import random
 import logging
 import datetime
 import contextlib
+import json
+import re
 from lib import model
 from lib.timer import Timer, days, seconds, minutes, years
 from collections import defaultdict
@@ -12,9 +14,179 @@ from lib.config import Configuration
 from typing import cast, TypeAlias
 from lib.blocklist import OnlineBlocklist
 from lib.lichess_types import UserProfileType, PerfType, EventType, FilterType, ChallengeType
+from pathlib import Path
 MULTIPROCESSING_LIST_TYPE: TypeAlias = Sequence[model.Challenge]
 
 logger = logging.getLogger(__name__)
+STOCKFISH_BLOCK_LIST_PATH = Path.home() / ".config" / "enyo" / "stockfish_blocklist.jsonl"
+LEGACY_STOCKFISH_BLOCK_LIST_PATH = Path.home() / ".config" / "enyo" / "stockfish_blocklist.txt"
+STOCKFISH_PROFILE_PATTERNS = (
+    re.compile(r"\bstockfish\b", re.IGNORECASE),
+    re.compile(r"\bsf\s*[-_]?\s*1[0-9]\b", re.IGNORECASE),
+)
+STOCKFISH_PATTERN = re.compile(r"\bstockfish\b", re.IGNORECASE)
+BLOCK_PATTERN = re.compile(r"\bblock(?:ing|s|ed)?\b", re.IGNORECASE)
+
+
+def stockfish_profile_text(profile: UserProfileType) -> str:
+    """Return public profile text worth scanning for engine identity."""
+    return "\n".join(text for _, text in stockfish_profile_fields(profile))
+
+
+def stockfish_profile_fields(profile: UserProfileType) -> list[tuple[str, str]]:
+    """Return public profile fields worth scanning for engine identity."""
+    profile_info = profile.get("profile", {})
+    fields = [
+        ("username", profile.get("username", "")),
+        ("bio", profile_info.get("bio", "")),
+        ("firstName", profile_info.get("firstName", "")),
+        ("lastName", profile_info.get("lastName", "")),
+        ("links", profile_info.get("links", "")),
+    ]
+    return [(field, str(text)) for field, text in fields if text]
+
+
+def text_mentions_stockfish(text: str) -> bool:
+    """Return whether free text appears to identify as Stockfish."""
+    return bool(stockfish_text_match(text))
+
+
+def stockfish_text_match(text: str) -> str:
+    """Return the exact text that appears to identify as Stockfish."""
+    lines = [line for line in text.splitlines()
+             if not (STOCKFISH_PATTERN.search(line) and BLOCK_PATTERN.search(line))]
+    for line in lines:
+        if any(pattern.search(line) for pattern in STOCKFISH_PROFILE_PATTERNS):
+            return line.strip()
+    return ""
+
+
+def profile_mentions_stockfish(profile: UserProfileType) -> bool:
+    """Return whether a public profile appears to identify as Stockfish."""
+    return bool(stockfish_profile_match(profile)[1])
+
+
+def stockfish_profile_match(profile: UserProfileType) -> tuple[str, str]:
+    """Return the public profile field and text that identify as Stockfish."""
+    for field, text in stockfish_profile_fields(profile):
+        match = stockfish_text_match(text)
+        if match:
+            return field, match
+    return "", ""
+
+
+def read_stockfish_block_list(path: Path = STOCKFISH_BLOCK_LIST_PATH) -> set[str]:
+    """Read the persistent local Stockfish-bot blocklist."""
+    blocked: set[str] = set()
+    for block_list_path in stockfish_block_list_paths(path):
+        blocked.update(read_stockfish_block_list_file(block_list_path))
+    return blocked
+
+
+def stockfish_block_list_paths(path: Path = STOCKFISH_BLOCK_LIST_PATH) -> list[Path]:
+    """Return the JSONL path and its legacy plain-text path."""
+    paths = [path]
+    if path == STOCKFISH_BLOCK_LIST_PATH:
+        paths.append(LEGACY_STOCKFISH_BLOCK_LIST_PATH)
+    elif path.suffix == ".jsonl":
+        paths.append(path.with_suffix(".txt"))
+    return paths
+
+
+def read_stockfish_block_list_file(path: Path) -> set[str]:
+    """Read one Stockfish-bot blocklist file."""
+    try:
+        return {username for line in path.read_text(encoding="utf-8").splitlines()
+                if (username := stockfish_block_list_username(line))}
+    except FileNotFoundError:
+        return set()
+
+
+def stockfish_block_list_entry_from_line(line: str) -> dict:
+    """Return a JSONL blocklist entry."""
+    text = line.strip()
+    if not text or text.startswith("#"):
+        return {}
+    try:
+        entry = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return entry if isinstance(entry, dict) else {}
+
+
+def stockfish_block_list_entry(username: str, path: Path = STOCKFISH_BLOCK_LIST_PATH) -> dict:
+    """Return the persistent blocklist entry for a username."""
+    target = username.casefold()
+    for block_list_path in stockfish_block_list_paths(path):
+        try:
+            for line in block_list_path.read_text(encoding="utf-8").splitlines():
+                entry = stockfish_block_list_entry_from_line(line)
+                if str(entry.get("username", "")).casefold() == target:
+                    return entry
+        except FileNotFoundError:
+            continue
+    return {}
+
+
+def stockfish_block_list_username(line: str) -> str:
+    """Return a normalized username from a JSONL or legacy plain-text blocklist line."""
+    text = line.strip()
+    if not text or text.startswith("#"):
+        return ""
+    if text.startswith("{"):
+        entry = stockfish_block_list_entry_from_line(text)
+        return str(entry.get("username", "")).strip().casefold()
+    return text.split("#", 1)[0].strip().casefold()
+
+
+def stockfish_block_list_contains(username: str, path: Path = STOCKFISH_BLOCK_LIST_PATH) -> bool:
+    """Return whether the username is in the persistent local Stockfish-bot blocklist."""
+    return username.casefold() in read_stockfish_block_list(path)
+
+
+def add_stockfish_block_list(username: str,
+                             source: str,
+                             field: str,
+                             matched_text: str,
+                             path: Path = STOCKFISH_BLOCK_LIST_PATH) -> None:
+    """Persistently block a Stockfish-identifying bot."""
+    blocked = read_stockfish_block_list(path)
+    if username.casefold() in blocked:
+        return
+
+    entry = {
+        "username": username,
+        "reason": "mentions Stockfish",
+        "source": source,
+        "field": field,
+        "matched_text": matched_text,
+        "blocked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as block_list:
+        block_list.write(f"{json.dumps(entry)}\n")
+
+
+def block_stockfish_profile(username: str, profile: UserProfileType, path: Path = STOCKFISH_BLOCK_LIST_PATH) -> bool:
+    """Persistently block a bot if its public profile identifies it as Stockfish."""
+    field, matched_text = stockfish_profile_match(profile)
+    if not matched_text:
+        return False
+
+    logger.warning(f"Blocking {username}: public profile {field} mentions Stockfish.")
+    add_stockfish_block_list(username, "public profile", field, matched_text, path)
+    return True
+
+
+def block_stockfish_text(username: str, text: str, source: str, path: Path = STOCKFISH_BLOCK_LIST_PATH) -> bool:
+    """Persistently block a bot if text identifies it as Stockfish."""
+    matched_text = stockfish_text_match(text)
+    if not matched_text:
+        return False
+
+    logger.warning(f"Blocking {username}: {source} mentions Stockfish.")
+    add_stockfish_block_list(username, source, source, matched_text, path)
+    return True
 
 
 class Matchmaking:
@@ -208,12 +380,20 @@ class Matchmaking:
         weights = self.get_weights(online_bots, rating_preference, min_rating, max_rating, game_type)
 
         try:
-            bot = random.choices(online_bots, weights=weights)[0]
-            bot_profile = self.li.get_public_data(bot["username"])
-            if bot_profile.get("blocking"):
-                self.add_to_block_list(bot["username"])
-            else:
-                bot_username = bot["username"]
+            while online_bots:
+                bot = random.choices(online_bots, weights=weights)[0]
+                bot_profile = self.li.get_public_data(bot["username"])
+                if bot_profile.get("blocking"):
+                    self.add_to_block_list(bot["username"])
+                elif self.matchmaking_cfg.ignore_stockfish_blocklist or not block_stockfish_profile(bot["username"], bot_profile):
+                    bot_username = bot["username"]
+                    break
+
+                online_bots.remove(bot)
+                weights = self.get_weights(online_bots, rating_preference, min_rating, max_rating, game_type)
+
+            if not bot_username:
+                logger.error("No suitable bots found to challenge.")
         except Exception:
             if online_bots:
                 logger.exception("Error:")
@@ -295,7 +475,11 @@ class Matchmaking:
 
     def in_block_list(self, username: str) -> bool:
         """Check if an opponent is in the block list to prevent future challenges."""
-        return (not self.should_accept_challenge(username, "")) or username in self.online_block_list
+        stockfish_blocked = (not self.matchmaking_cfg.ignore_stockfish_blocklist
+                             and stockfish_block_list_contains(username))
+        return ((not self.should_accept_challenge(username, ""))
+                or username in self.online_block_list
+                or stockfish_blocked)
 
     def add_challenge_filter(self, username: str, game_aspect: str, timeout: datetime.timedelta | None = None) -> None:
         """

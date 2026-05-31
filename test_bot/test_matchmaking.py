@@ -1,8 +1,13 @@
 """Test functions for matchmaking module."""
-from unittest.mock import Mock
-from lib.matchmaking import game_category, Matchmaking
+from unittest.mock import Mock, patch
+from lib.matchmaking import (block_stockfish_profile, block_stockfish_text, game_category, Matchmaking,
+                             profile_mentions_stockfish, stockfish_block_list_contains,
+                             stockfish_block_list_entry, text_mentions_stockfish)
 from lib.config import Configuration
 from lib.lichess_types import UserProfileType
+from pathlib import Path
+import json
+import tempfile
 
 
 def test_game_category_standard_bullet() -> None:
@@ -14,6 +19,148 @@ def test_game_category_standard_bullet() -> None:
     # challenge_initial_time: 60, challenge_increment: 2
     # 60 + 2*40 = 140 seconds < 179 = bullet
     assert game_category("standard", 60, 2, 0) == "bullet"
+
+
+def test_profile_mentions_stockfish() -> None:
+    """Test that Stockfish-identifying public profiles are detected."""
+    profile: UserProfileType = {
+        "username": "somebot",
+        "profile": {"bio": "Running Stockfish 17 via lichess-bot."},
+    }
+
+    assert profile_mentions_stockfish(profile)
+
+
+def test_profile_blocks_stockfish_bots_is_not_stockfish() -> None:
+    """Test that anti-Stockfish wording does not identify the bot as Stockfish."""
+    profile: UserProfileType = {
+        "username": "PZChessBot",
+        "profile": {"bio": "BLOCKING ALL STOCKFISH BOTS. If you don't want to get blocked, don't challenge!"},
+    }
+
+    assert not profile_mentions_stockfish(profile)
+
+
+def test_profile_block_and_stockfish_on_same_line_is_not_stockfish() -> None:
+    """Test that any line mentioning both block and Stockfish is ignored."""
+    profile: UserProfileType = {
+        "username": "somebot",
+        "profile": {"bio": "I block engines using stockfish and other external assistance."},
+    }
+
+    assert not profile_mentions_stockfish(profile)
+
+
+def test_profile_blocks_stockfish_bots_but_also_runs_stockfish() -> None:
+    """Test that rejection wording does not hide a separate Stockfish identity claim."""
+    profile: UserProfileType = {
+        "username": "somebot",
+        "profile": {"bio": "Blocking all Stockfish bots.\nI run Stockfish 17."},
+    }
+
+    assert profile_mentions_stockfish(profile)
+
+
+def test_chat_mentions_stockfish_engine_name() -> None:
+    """Test that Stockfish-identifying chat replies are detected."""
+    text = "Hey, I'm running Stockfish dev-20260213-77d46ff6. Type !help for a list of commands."
+
+    assert text_mentions_stockfish(text)
+
+
+def test_chat_block_and_stockfish_on_same_line_is_not_stockfish() -> None:
+    """Test that anti-Stockfish chat wording does not identify the bot as Stockfish."""
+    text = "BLOCKING ALL STOCKFISH BOTS. If you don't want to get blocked, don't challenge!"
+
+    assert not text_mentions_stockfish(text)
+
+
+def test_stockfish_chat_block_list_is_persistent() -> None:
+    """Test that detected Stockfish chat replies are written to the persistent blocklist."""
+    text = "Running Stockfish 17 via lichess-bot."
+    with tempfile.TemporaryDirectory() as temp:
+        block_list_path = Path(temp) / "stockfish_blocklist.jsonl"
+
+        assert block_stockfish_text("SomeBot", text, "chat message", block_list_path)
+        assert stockfish_block_list_contains("somebot", block_list_path)
+        line = block_list_path.read_text(encoding="utf-8")
+        assert line.startswith('{"username":')
+        entry = json.loads(line)
+        assert entry["username"] == "SomeBot"
+        assert entry["reason"] == "mentions Stockfish"
+        assert entry["source"] == "chat message"
+        assert entry["field"] == "chat message"
+        assert entry["matched_text"] == text
+
+
+def test_stockfish_block_list_is_persistent() -> None:
+    """Test that detected Stockfish bots are written to a persistent blocklist."""
+    profile: UserProfileType = {
+        "username": "somebot",
+        "profile": {"bio": "Runs SF 17."},
+    }
+    with tempfile.TemporaryDirectory() as temp:
+        block_list_path = Path(temp) / "stockfish_blocklist.jsonl"
+
+        assert block_stockfish_profile("SomeBot", profile, block_list_path)
+        assert stockfish_block_list_contains("somebot", block_list_path)
+        entry = json.loads(block_list_path.read_text(encoding="utf-8"))
+        assert entry["username"] == "SomeBot"
+        assert entry["reason"] == "mentions Stockfish"
+        assert entry["source"] == "public profile"
+        assert entry["field"] == "bio"
+        assert entry["matched_text"] == "Runs SF 17."
+        assert stockfish_block_list_entry("somebot", block_list_path)["matched_text"] == "Runs SF 17."
+
+
+def test_stockfish_block_list_reads_legacy_plain_text() -> None:
+    """Test that the JSONL blocklist reader still reads the legacy text file."""
+    with tempfile.TemporaryDirectory() as temp:
+        block_list_path = Path(temp) / "stockfish_blocklist.jsonl"
+        block_list_path.with_suffix(".txt").write_text("OldBot\nOtherBot # old comment\n", encoding="utf-8")
+
+        assert stockfish_block_list_contains("oldbot", block_list_path)
+        assert stockfish_block_list_contains("otherbot", block_list_path)
+
+
+def test_matchmaking_uses_stockfish_block_list() -> None:
+    """Test that matchmaking blocks Stockfish blocklist entries by default."""
+    mock_li = Mock()
+    mock_config = Configuration({
+        "challenge": {"variants": ["standard"]},
+        "matchmaking": {
+            "allow_matchmaking": False,
+            "block_list": [],
+            "online_block_list": [],
+            "ignore_stockfish_blocklist": False,
+        },
+    })
+    mock_user_profile: UserProfileType = {"username": "testbot", "perfs": {}}
+    matchmaking = Matchmaking(mock_li, mock_config, mock_user_profile)
+    matchmaking.should_accept_challenge = Mock(return_value=True)
+
+    with patch("lib.matchmaking.stockfish_block_list_contains", return_value=True):
+        assert matchmaking.in_block_list("SomeBot")
+
+
+def test_matchmaking_can_ignore_stockfish_block_list() -> None:
+    """Test that matchmaking can ignore Stockfish blocklist entries."""
+    mock_li = Mock()
+    mock_config = Configuration({
+        "challenge": {"variants": ["standard"]},
+        "matchmaking": {
+            "allow_matchmaking": False,
+            "block_list": [],
+            "online_block_list": [],
+            "ignore_stockfish_blocklist": True,
+        },
+    })
+    mock_user_profile: UserProfileType = {"username": "testbot", "perfs": {}}
+    matchmaking = Matchmaking(mock_li, mock_config, mock_user_profile)
+    matchmaking.should_accept_challenge = Mock(return_value=True)
+
+    with patch("lib.matchmaking.stockfish_block_list_contains", return_value=True):
+        assert not matchmaking.in_block_list("SomeBot")
 
 
 def test_game_category_standard_blitz() -> None:

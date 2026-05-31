@@ -181,6 +181,7 @@ challenge:                         # Incoming challenges.
 # rating_difference: 300          # Maximum rating difference between the bot and the challenger. Overrides min_rating and max_rating if set.
 # rating_difference_allow_higher: false  # If rating_difference is set, allow challengers above the bot's rating + rating_difference.
 # ignore_casual_human_rating: false # Ignore rating limits for casual games from human challengers.
+# ignore_stockfish_blocklist: false # Ignore the local Enyo Stockfish blocklist and profile filter for incoming challenges.
   bullet_requires_increment: false # Require that bullet game challenges from bots have a non-zero increment
   max_simultaneous_games_per_user: 5  # Maximum number of simultaneous games with the same user
 
@@ -220,6 +221,7 @@ matchmaking:
   rating_preference: "none"        # One of "none", "high", "low".
   challenge_mode: "random"         # Set it to the mode in which challenges are sent. Possible options are 'casual', 'rated' and 'random'.
   challenge_filter: none           # If a bot declines a challenge, do not issue a similar challenge to that bot. Possible options are 'none', 'coarse', and 'fine'.
+# ignore_stockfish_blocklist: false # Ignore the local Enyo Stockfish blocklist and profile filter for outgoing matchmaking.
 # block_list:                      # The list of bots that will not be challenged
 #   - user1
 #   - user2

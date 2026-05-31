@@ -1,6 +1,6 @@
 """Allows lichess-bot to send messages to the chat."""
 import logging
-from lib import model
+from lib import matchmaking, model
 from lib.engine_wrapper import EngineWrapper
 from lib.lichess import Lichess
 from lib.lichess_types import GameEventType
@@ -45,6 +45,7 @@ class Conversation:
         self.version = version
         self.challengers = challenge_queue
         self.messages: list[ChatLine] = []
+        self.auto_name_query_pending = False
 
     command_prefix = "!"
 
@@ -56,8 +57,25 @@ class Conversation:
         """
         self.messages.append(line)
         logger.info(f"*** {self.game.url()} [{line.room}] {line.username}: {line.text}")
-        if line.text[0] == self.command_prefix:
+        self.block_stockfish_chat(line)
+
+        if self.auto_name_query_pending and line.username == self.game.username and line.text == "!name":
+            self.auto_name_query_pending = False
+            return
+
+        if line.text and line.text[0] == self.command_prefix:
             self.command(line, line.text[1:].lower())
+
+    def block_stockfish_chat(self, line: ChatLine) -> None:
+        """Block future games if the opponent identifies as Stockfish in chat."""
+        if line.room == "player" and line.username.casefold() == self.game.opponent.name.casefold():
+            matchmaking.block_stockfish_text(line.username, line.text, "chat message")
+
+    def ask_opponent_name(self) -> None:
+        """Ask bot opponents to identify their engine."""
+        if self.game.opponent.is_bot:
+            self.auto_name_query_pending = True
+            self.send_message("player", "!name")
 
     def command(self, line: ChatLine, cmd: str) -> None:
         """

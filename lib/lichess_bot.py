@@ -761,6 +761,19 @@ def handle_challenge(event: EventType, li: lichess.Lichess, challenge_queue: MUL
     if chlng.from_self:
         return
 
+    use_stockfish_blocklist = not challenge_config.ignore_stockfish_blocklist
+    if use_stockfish_blocklist and chlng.challenger.is_bot and matchmaking.stockfish_block_list_contains(chlng.challenger.name):
+        logger.warning(f"Decline {chlng}: {chlng.challenger.name} is in the local Stockfish blocklist.")
+        li.decline_challenge(chlng.id, reason="generic")
+        return
+
+    if use_stockfish_blocklist and chlng.challenger.is_bot:
+        with contextlib.suppress(Exception):
+            if matchmaking.block_stockfish_profile(chlng.challenger.name, li.get_public_data(chlng.challenger.name)):
+                logger.warning(f"Decline {chlng}: public profile mentions Stockfish.")
+                li.decline_challenge(chlng.id, reason="generic")
+                return
+
     active_games = li.get_ongoing_games() or []
     opponent_engagements = Counter(game["opponent"]["username"] for game in active_games)
     opponent_engagements.update(challenge.challenger.name for challenge in challenge_queue)
@@ -1004,6 +1017,7 @@ def say_hello(conversation: Conversation, hello: str, hello_spectators: str, boa
     if len(board.move_stack) < 2:
         conversation.send_message("player", hello)
         conversation.send_message("spectator", hello_spectators)
+        conversation.ask_opponent_name()
 
 
 def fake_think_time(config: Configuration, board: chess.Board, game: model.Game) -> datetime.timedelta:
