@@ -312,6 +312,7 @@ class Player:
         """:param player_info: Contains information about a player."""
         self.title = player_info.get("title")
         self.rating = player_info.get("rating")
+        self.rating_diff = player_info.get("ratingDiff")
         self.provisional = player_info.get("provisional")
         self.aiLevel = player_info.get("aiLevel")
         self.is_bot = self.title == "BOT" or self.aiLevel is not None

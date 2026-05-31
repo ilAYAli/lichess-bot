@@ -71,6 +71,14 @@ class VersioningType(TypedDict):
 
 logger = logging.getLogger(__name__)
 
+try:
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from notify_ntfy import maybe_notify_game, maybe_notify_game_start
+except Exception:
+    maybe_notify_game = None
+    maybe_notify_game_start = None
+
 with open(os.path.join(os.path.dirname(__file__), "versioning.yml")) as version_file:
     versioning_info: VersioningType = yaml.safe_load(version_file)
 
@@ -343,6 +351,7 @@ def lichess_bot_main(li: lichess.Lichess,
     max_games = config.challenge.concurrency
 
     one_game_completed = False
+    one_game_stopping = False
 
     all_games = li.get_ongoing_games() or []
     prune_takeback_records(all_games)
@@ -372,7 +381,7 @@ def lichess_bot_main(li: lichess.Lichess,
         logger.info("Press Ctrl-C twice to quit immediately.")
 
     with multiprocessing.pool.Pool(max_games + 1) as pool:
-        while not (stop.terminated or (one_game and one_game_completed) or stop.restart):
+        while not (stop.terminated or stop.restart or (one_game_stopping and not active_games)):
             event = next_event(control_queue)
             if not event:
                 continue
@@ -387,6 +396,8 @@ def lichess_bot_main(li: lichess.Lichess,
                 matchmaker.game_done()
                 log_proc_count("Freed", active_games)
                 one_game_completed = True
+                if one_game:
+                    one_game_stopping = True
             elif event["type"] == "challenge":
                 handle_challenge(event,
                                  li,
@@ -402,6 +413,8 @@ def lichess_bot_main(li: lichess.Lichess,
                 log_proc_count("Freed", active_games)
             elif event["type"] == "gameStart":
                 matchmaker.accepted_challenge(event)
+                if maybe_notify_game_start:
+                    maybe_notify_game_start(event)
                 start_game(event,
                            pool,
                            play_game_args,
@@ -419,8 +432,9 @@ def lichess_bot_main(li: lichess.Lichess,
                                              play_game_args,
                                              active_games,
                                              max_games)
-            accept_challenges(li, challenge_queue, active_games, max_games)
-            matchmaker.challenge(active_games, challenge_queue, max_games)
+            if not one_game_stopping:
+                accept_challenges(li, challenge_queue, active_games, max_games)
+                matchmaker.challenge(active_games, challenge_queue, max_games)
             check_online_status(li, user_profile, last_check_online_time)
 
             control_queue.task_done()
@@ -677,6 +691,10 @@ def play_game(li: lichess.Lichess,
         game = model.Game(initial_state, user_profile["username"], li.baseUrl, abort_time)
 
         with engine_wrapper.create_engine(config, game) as engine:
+            game_log_path = get_game_log_path(config, game)
+            if game_log_path:
+                os.makedirs(os.path.dirname(game_log_path), exist_ok=True)
+                engine.configure({"logfile": game_log_path}, game)
             engine.get_opponent_info(game)
             logger.debug(f"The engine for game {game_id} has pid={engine.get_pid()}")
             conversation = Conversation(game, engine, li, __version__, challenge_queue)
@@ -763,6 +781,11 @@ def play_game(li: lichess.Lichess,
                     stay_in_game = not stopped and (move_attempted or game_is_active(li, game.id))
 
             pgn_record = try_get_pgn_game_record(li, config, game, board, engine)
+            if is_game_over(game) and maybe_notify_game:
+                try:
+                    maybe_notify_game(game, pgn_record)
+                except Exception:
+                    pass
         final_queue_entries(control_queue, correspondence_queue, game, is_correspondence, pgn_record, pgn_queue)
         delete_takeback_record(game)
 
@@ -993,6 +1016,8 @@ def try_get_pgn_game_record(li: lichess.Lichess, config: Configuration, game: mo
         return pgn_game_record(li, config, game, board, engine)
     except Exception:
         logger.exception("Error writing game record:")
+        with contextlib.suppress(Exception):
+            return li.get_game_pgn(game.id)
         return ""
 
 
@@ -1071,6 +1096,14 @@ def get_game_file_path(config: Configuration,
         return create_valid_path(f"{user_name} games vs. {opponent_name}.pgn")
     else:  # config.pgn_file_grouping == "all"
         return create_valid_path(f"{user_name} games.pgn")
+
+
+def get_game_log_path(config: Configuration, game: model.Game) -> str | None:
+    if not config.pgn_directory:
+        return None
+
+    game_path = get_game_file_path(config, game.id, game.white.name, game.black.name, game.me.name, is_game_over(game), force_single=True)
+    return f"{os.path.splitext(game_path)[0]}.log"
 
 
 def fill_missing_pgn_headers(game_record: chess.pgn.Game, game: model.Game) -> None:
@@ -1189,6 +1222,7 @@ def start_lichess_bot() -> None:
     parser.add_argument("--config", help="Specify a configuration file (defaults to ./config.yml).")
     parser.add_argument("-l", "--logfile", help="Record all console output to a log file.", default=None)
     parser.add_argument("--disable_auto_logging", action="store_true", help="Disable automatic logging.")
+    parser.add_argument("--one-game", action="store_true", help="Play exactly one completed game and then exit cleanly.")
     args = parser.parse_args()
 
     logging_level = logging.DEBUG if args.v else logging.INFO
@@ -1218,7 +1252,7 @@ def start_lichess_bot() -> None:
         is_bot = upgrade_account(li)
 
     if is_bot:
-        start(li, user_profile, CONFIG, logging_level, args.logfile, args.disable_auto_logging)
+        start(li, user_profile, CONFIG, logging_level, args.logfile, args.disable_auto_logging, args.one_game)
     else:
         logger.error(f"{username} is not a bot account. Please upgrade it to a bot account!")
     logging.shutdown()
