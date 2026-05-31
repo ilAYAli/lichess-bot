@@ -49,6 +49,15 @@ def test_game_stream_client_error_is_final() -> None:
     assert lichess_bot.is_play_game_final(http_error(404))
 
 
+def test_rejected_move_submission_is_not_a_stream_error() -> None:
+    """Test that a rejected move POST is classified separately from stream errors."""
+    error = http_error(400)
+    error.response.url = "https://lichess.org/api/bot/game/gameid/move/e2e4?offeringDraw=false"
+    game = SimpleNamespace(id="gameid")
+
+    assert lichess_bot.is_rejected_move_submission(game, error)
+
+
 def test_start_game_thread_ignores_duplicate_running_game() -> None:
     """Test that duplicate gameStart events do not spawn duplicate workers."""
     active_games = {"gameid"}
