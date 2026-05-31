@@ -58,6 +58,15 @@ def test_rejected_move_submission_is_not_a_stream_error() -> None:
     assert lichess_bot.is_rejected_move_submission(game, error)
 
 
+def test_server_error_on_move_is_not_a_rejected_submission() -> None:
+    """Test that 5xx errors on the move endpoint fall through to the reconnect path."""
+    error = http_error(500)
+    error.response.url = "https://lichess.org/api/bot/game/gameid/move/e2e4?offeringDraw=false"
+    game = SimpleNamespace(id="gameid")
+
+    assert not lichess_bot.is_rejected_move_submission(game, error)
+
+
 def test_start_game_thread_ignores_duplicate_running_game() -> None:
     """Test that duplicate gameStart events do not spawn duplicate workers."""
     active_games = {"gameid"}
