@@ -81,6 +81,7 @@ def remove_managed_options(config: Configuration) -> OPTIONS_GO_EGTB_TYPE:
 
 
 PONDERPV_CHARACTERS = 6  # The length of ", Pv: ".
+FIRST_MOVE_SEARCH_TIME = seconds(1)
 
 
 class EngineWrapper:
@@ -704,10 +705,10 @@ def move_time(board: chess.Board,
     :param correspondence_move_time: How much time to use for this move it it is a correspondence game.
     :return: The time to choose a move and whether the bot can ponder after the move.
     """
-    if len(board.move_stack) < 2:
-        return first_move_time(game), False  # No pondering after the first move since a new clock starts afterwards.
     if is_correspondence:
         return single_move_time(board, game, correspondence_move_time, setup_timer, move_overhead), can_ponder
+    if len(board.move_stack) < 2:
+        return first_move_time(board, game, setup_timer, move_overhead), False
     return game_clock_time(board, game, setup_timer, move_overhead), can_ponder
 
 
@@ -741,15 +742,22 @@ def single_move_time(board: chess.Board, game: model.Game, search_time: datetime
     return chess.engine.Limit(time=to_seconds(search_time), clock_id="correspondence")
 
 
-def first_move_time(game: model.Game) -> chess.engine.Limit:
+def first_move_time(board: chess.Board,
+                    game: model.Game,
+                    setup_timer: Timer,
+                    move_overhead: datetime.timedelta) -> chess.engine.Limit:
     """
     Determine time limit for the first move in the game.
 
+    :param board: The current positions.
     :param game: The game that the bot is playing.
+    :param setup_timer: How much time has passed since receiving the opponent's move.
+    :param move_overhead: The time it takes to communicate between the engine and lichess-bot.
     :return: The time to choose the first move.
     """
-    # Need to hardcode first movetime since Lichess has 30 sec limit.
-    search_time = seconds(10)
+    overhead = setup_timer.time_since_reset() + move_overhead
+    clock_time = max(msec(1), msec(game.state[wbtime(board)]) - overhead)
+    search_time = min(FIRST_MOVE_SEARCH_TIME, clock_time)
     logger.info(f"Searching for time {sec_str(search_time)} seconds for game {game.id}")
     return chess.engine.Limit(time=to_seconds(search_time), clock_id="first move")
 

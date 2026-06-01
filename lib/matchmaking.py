@@ -217,7 +217,7 @@ class Matchmaking:
         """Whether we should create a challenge."""
         matchmaking_enabled = self.matchmaking_cfg.allow_matchmaking
         rate_limit_ok = self.rate_limit_timer.is_expired()
-        time_has_passed = self.last_game_ended_delay.is_expired() and rate_limit_ok
+        time_has_passed = self.last_game_ended_delay.is_expired()
         challenge_expired = self.last_challenge_created_delay.is_expired() and self.challenge_id
         min_wait_time_passed = self.last_challenge_created_delay.time_since_reset() > self.min_wait_time
         if challenge_expired:
