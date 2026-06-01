@@ -941,7 +941,9 @@ def play_game(li: lichess.Lichess,
                 except (HTTPError, ReadTimeout, RemoteDisconnected, ChunkedEncodingError, RequestsConnectionError,
                         lichess.RateLimitedError, StopIteration) as e:
                     if is_rejected_move_submission(game, e):
-                        status_code = e.response.status_code if isinstance(e, HTTPError) and e.response else "unknown"
+                        status_code = (e.response.status_code
+                                       if isinstance(e, HTTPError) and e.response is not None
+                                       else "unknown")
                         logger.warning(f"Move for {game.url()} was rejected by Lichess ({status_code}); "
                                        "refreshing game state.")
                         if refresh_game_state_from_stream(li, game):
