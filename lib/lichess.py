@@ -250,6 +250,36 @@ class Lichess:
         response = self.api_get(endpoint_name, *template_args, params=params)
         return response.text
 
+    def _api_post_once(self,
+                       endpoint_name: str,
+                       *template_args: str,
+                       data: str | dict[str, str] | None = None,
+                       headers: dict[str, str] | None = None,
+                       params: dict[str, str] | None = None,
+                       payload: REQUESTS_PAYLOAD_TYPE | None = None,
+                       raise_for_status: bool = True) -> ChallengeType | TOKEN_TESTS_TYPE | None:
+        """Send one POST request without retrying ambiguous failures."""
+        path_template = self.get_path_template(endpoint_name)
+        url = urljoin(self.baseUrl, path_template.format(*template_args))
+        timeout = 10 if endpoint_name == "token_test" else 2
+        response = self.session.post(url, data=data, headers=headers, params=params, json=payload, timeout=timeout)
+
+        if endpoint_name == "challenge":
+            return self.handle_challenge(response)
+
+        if is_new_rate_limit(response):
+            self.set_rate_limit_delay(path_template, seconds(60), "default cooldown")
+
+        if raise_for_status:
+            response.raise_for_status()
+
+        json_response: ChallengeType | TOKEN_TESTS_TYPE | None = response.json()
+        if (endpoint_name == "token_test"
+                and isinstance(data, str)
+                and (not isinstance(json_response, dict) or data not in json_response)):
+            raise MissingTokenInfoError("Lichess token test response did not include the requested token.")
+        return json_response
+
     @backoff.on_exception(backoff.constant,
                           (RemoteDisconnected, RequestsConnectionError, HTTPError, ReadTimeout),
                           max_time=60,
@@ -267,37 +297,19 @@ class Lichess:
                  payload: REQUESTS_PAYLOAD_TYPE | None = None,
                  raise_for_status: bool = True) -> ChallengeType | TOKEN_TESTS_TYPE | None:
         """
-        Send a POST to lichess.org.
+        Send a POST to lichess.org, retrying transient failures.
 
-        :param endpoint_name: The name of the endpoint.
-        :param template_args: The values that go in the url (e.g. the challenge id if `endpoint_name` is `accept`).
-        :param data: Data sent to lichess.org.
-        :param headers: The headers for the request.
-        :param params: Parameters sent to lichess.org.
-        :param payload: Payload sent to lichess.org.
-        :param raise_for_status: Whether to raise an exception if the response contains an error code.
-        :return: lichess.org's response in a dict.
+        Move submissions bypass this retry wrapper because their outcome must be
+        reconciled with the live game state before another request is sent.
         """
         logging.getLogger("backoff").setLevel(self.logging_level)
-        path_template = self.get_path_template(endpoint_name)
-        url = urljoin(self.baseUrl, path_template.format(*template_args))
-        timeout = 10 if endpoint_name == "token_test" else 2
-        response = self.session.post(url, data=data, headers=headers, params=params, json=payload, timeout=timeout)
-
-        if endpoint_name == "challenge":
-            return self.handle_challenge(response)
-
-        if is_new_rate_limit(response):
-            self.set_rate_limit_delay(path_template, seconds(60), "default cooldown")
-
-        if raise_for_status:
-            response.raise_for_status()
-
-        json_response: ChallengeType | TOKEN_TESTS_TYPE | None = response.json()
-        if endpoint_name == "token_test" and isinstance(data, str):
-            if not isinstance(json_response, dict) or data not in json_response:
-                raise MissingTokenInfoError("Lichess token test response did not include the requested token.")
-        return json_response
+        return self._api_post_once(endpoint_name,
+                                   *template_args,
+                                   data=data,
+                                   headers=headers,
+                                   params=params,
+                                   payload=payload,
+                                   raise_for_status=raise_for_status)
 
     def get_path_template(self, endpoint_name: str) -> str:
         """
@@ -387,8 +399,14 @@ class Lichess:
         :param game_id: The id of the game.
         :param move: The move to make.
         """
-        self.api_post("move", game_id, str(move.move),
-                      params={"offeringDraw": str(move.draw_offered).lower()})
+        move_uci = str(move.move)
+        try:
+            self._api_post_once("move", game_id, move_uci,
+                                params={"offeringDraw": str(move.draw_offered).lower()})
+        except (RemoteDisconnected, RequestsConnectionError, ReadTimeout) as error:
+            logger.warning(f"Move {move_uci} for game {game_id} was not acknowledged "
+                           f"({type(error).__name__}); reopening the game stream immediately.")
+            raise
 
     def accept_takeback(self, game_id: str, accept: bool) -> bool:
         """Answer an opponent's move takeback request."""

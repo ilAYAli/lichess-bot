@@ -1,9 +1,52 @@
 """Tests for the lichess communication."""
 
+from collections import defaultdict
+from unittest.mock import Mock, patch
+
+import chess
 from lib import lichess
+from lib.timer import Timer
 import logging
 import os
 import pytest
+import requests
+from requests.exceptions import ReadTimeout
+
+
+def mock_lichess() -> lichess.Lichess:
+    """Create a Lichess client without making the token-test request."""
+    li = object.__new__(lichess.Lichess)
+    li.baseUrl = "https://lichess.org/"
+    li.logging_level = logging.DEBUG
+    li.rate_limit_timers = defaultdict(Timer)
+    li.session = requests.Session()
+    return li
+
+
+def test_move_submission_does_not_retry_ambiguous_timeout(caplog: pytest.LogCaptureFixture) -> None:
+    """A move timeout must return control to game-state recovery immediately."""
+    li = mock_lichess()
+    move = chess.engine.PlayResult(chess.Move.from_uci("e2e4"), None)
+
+    with (patch.object(li.session, "post", side_effect=ReadTimeout("move response timed out")) as post,
+          caplog.at_level(logging.WARNING),
+          pytest.raises(ReadTimeout)):
+        li.make_move("gameid", move)
+
+    post.assert_called_once()
+    assert "Move e2e4 for game gameid was not acknowledged (ReadTimeout)" in caplog.text
+
+
+def test_non_move_post_keeps_transient_retry() -> None:
+    """Removing move retries must not change retries for other API actions."""
+    li = mock_lichess()
+    response = Mock(status_code=200)
+    response.json.return_value = {}
+
+    with patch.object(li.session, "post", side_effect=[ReadTimeout("chat response timed out"), response]) as post:
+        assert li.api_post("chat", "gameid", data={"room": "player", "text": "hello"}) == {}
+
+    assert post.call_count == 2
 
 
 def test_lichess() -> None:
