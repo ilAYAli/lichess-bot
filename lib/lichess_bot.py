@@ -897,7 +897,6 @@ def _play_game_once(li: lichess.Lichess,
             keyword_map: defaultdict[str, str] = defaultdict(str, me=game.me.name, opponent=game.opponent.name)
             hello = get_greeting("hello", config.greeting, keyword_map)
             hello_stockfish = get_greeting("hello_stockfish", config.greeting, keyword_map)
-            hello = get_player_greeting(game, hello, hello_stockfish)
             goodbye = get_greeting("goodbye", config.greeting, keyword_map)
             hello_spectators = get_greeting("hello_spectators", config.greeting, keyword_map)
             goodbye_spectators = get_greeting("goodbye_spectators", config.greeting, keyword_map)
@@ -917,11 +916,13 @@ def _play_game_once(li: lichess.Lichess,
                     elif u_type == "gameState":
                         game.state = upd
                         board = setup_board(game)
+                        if len(board.move_stack) >= 2:
+                            conversation.finish_pending_greeting()
                         takeback_field = game.state.get("btakeback") if game.is_white else game.state.get("wtakeback")
 
                         if not is_game_over(game) and is_engine_move(game, prior_game, board):
                             disconnect_time = correspondence_disconnect_time
-                            say_hello(conversation, hello, hello_spectators, board)
+                            say_hello(conversation, hello, hello_spectators, hello_stockfish, board)
                             setup_timer = Timer()
                             print_move_number(board)
                             engine.play_move(board,
@@ -1062,19 +1063,14 @@ def get_greeting(greeting: str, greeting_cfg: Configuration, keyword_map: defaul
     return greeting_text.format_map(keyword_map)
 
 
-def get_player_greeting(game: model.Game, hello: str, hello_stockfish: str) -> str:
-    """Return the Stockfish greeting for known Stockfish bots."""
-    is_stockfish = (game.opponent.is_bot
-                    and matchmaking.stockfish_block_list_contains(game.opponent.name))
-    return hello_stockfish if is_stockfish else hello
-
-
-def say_hello(conversation: Conversation, hello: str, hello_spectators: str, board: chess.Board) -> None:
+def say_hello(conversation: Conversation,
+              hello: str,
+              hello_spectators: str,
+              hello_stockfish: str,
+              board: chess.Board) -> None:
     """Send the greetings to the chat rooms."""
     if len(board.move_stack) < 2:
-        conversation.send_message("player", hello)
-        conversation.send_message("spectator", hello_spectators)
-        conversation.ask_opponent_name()
+        conversation.start_greeting(hello, hello_spectators, hello_stockfish)
 
 
 def fake_think_time(config: Configuration, board: chess.Board, game: model.Game) -> datetime.timedelta:
