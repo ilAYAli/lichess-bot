@@ -46,6 +46,14 @@ class Conversation:
         self.challengers = challenge_queue
         self.messages: list[ChatLine] = []
         self.auto_name_query_pending = False
+        self.player_greeting = ""
+        self.spectator_greeting = ""
+        self.stockfish_greeting = ""
+        self.greeting_started = False
+        self.greeting_pending = False
+        self.greeting_sent = False
+        self.stockfish_detected = False
+        self.stockfish_greeting_sent = False
 
     command_prefix = "!"
 
@@ -57,7 +65,12 @@ class Conversation:
         """
         self.messages.append(line)
         logger.info(f"*** {self.game.url()} [{line.room}] {line.username}: {line.text}")
-        self.block_stockfish_chat(line)
+        stockfish_detected = self.block_stockfish_chat(line)
+
+        if stockfish_detected:
+            self.send_stockfish_greeting()
+        elif self.greeting_pending and self.is_opponent_name_reply(line):
+            self.send_normal_greeting()
 
         if self.auto_name_query_pending and line.username == self.game.username and line.text == "!name":
             self.auto_name_query_pending = False
@@ -66,10 +79,65 @@ class Conversation:
         if line.text and line.text[0] == self.command_prefix:
             self.command(line, line.text[1:].lower())
 
-    def block_stockfish_chat(self, line: ChatLine) -> None:
-        """Block future games if the opponent identifies as Stockfish in chat."""
-        if line.room == "player" and line.username.casefold() == self.game.opponent.name.casefold():
-            matchmaking.block_stockfish_text(line.username, line.text, "chat message")
+    def block_stockfish_chat(self, line: ChatLine) -> bool:
+        """Record whether the opponent identifies as Stockfish in either chat room."""
+        from_opponent = line.username.casefold() == self.game.opponent.name.casefold()
+        supported_room = line.room == "player" or self.is_opponent_name_reply(line)
+        if from_opponent and supported_room:
+            return matchmaking.block_stockfish_text(line.username, line.text, "chat message")
+        return False
+
+    def is_opponent_name_reply(self, line: ChatLine) -> bool:
+        """Return whether a chat line is the opponent's conventional !name reply."""
+        if line.username.casefold() != self.game.opponent.name.casefold():
+            return False
+        expected_prefix = f"{self.game.opponent.name} running ".casefold()
+        return line.text.casefold().startswith(expected_prefix)
+
+    def start_greeting(self, player: str, spectator: str, stockfish: str) -> None:
+        """Start greeting, querying an unknown bot's engine before choosing the text."""
+        if self.greeting_started:
+            return
+
+        self.greeting_started = True
+        self.player_greeting = player
+        self.spectator_greeting = spectator
+        self.stockfish_greeting = stockfish
+
+        if not self.game.opponent.is_bot:
+            self.send_normal_greeting()
+            return
+
+        if self.stockfish_detected or matchmaking.stockfish_block_list_contains(self.game.opponent.name):
+            self.send_stockfish_greeting()
+        else:
+            self.greeting_pending = True
+        self.ask_opponent_name()
+
+    def finish_pending_greeting(self) -> None:
+        """Use the normal greeting when a bot does not answer !name promptly."""
+        if self.greeting_pending:
+            self.send_normal_greeting()
+
+    def send_normal_greeting(self) -> None:
+        """Send the configured normal greetings once."""
+        if self.greeting_sent:
+            return
+        self.greeting_pending = False
+        self.send_message("player", self.player_greeting)
+        self.send_message("spectator", self.spectator_greeting)
+        self.greeting_sent = True
+
+    def send_stockfish_greeting(self) -> None:
+        """Send the Stockfish greeting once after a positive detection."""
+        self.stockfish_detected = True
+        if not self.greeting_started or self.stockfish_greeting_sent:
+            return
+        self.greeting_pending = False
+        self.send_message("player", self.stockfish_greeting)
+        self.send_message("spectator", self.stockfish_greeting)
+        self.greeting_sent = True
+        self.stockfish_greeting_sent = True
 
     def ask_opponent_name(self) -> None:
         """Ask bot opponents to identify their engine."""
