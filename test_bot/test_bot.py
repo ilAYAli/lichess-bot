@@ -13,7 +13,9 @@ import tempfile
 from types import SimpleNamespace
 from multiprocessing import Manager
 from queue import Queue
-from requests import HTTPError, Response
+from unittest.mock import Mock, patch
+from requests import Response
+from requests.exceptions import HTTPError
 import test_bot.lichess
 from lib import config
 from lib.timer import Timer, seconds
@@ -31,6 +33,35 @@ lichess_bot.logging_configurer(logging_level, testing_log_file_name, True)
 logger = logging.getLogger(__name__)
 
 
+def http_error(status_code: int) -> HTTPError:
+    """Create an HTTPError with a status code."""
+    response = Response()
+    response.status_code = status_code
+    return HTTPError(response=response)
+
+
+def test_game_stream_rate_limit_is_not_final() -> None:
+    """Test that game stream 429s are retried by the play-game backoff."""
+    assert not lichess_bot.is_play_game_final(http_error(429))
+
+
+def test_stockfish_opponent_gets_stockfish_greeting() -> None:
+    """Use the Stockfish greeting for a detected Stockfish bot."""
+    game = SimpleNamespace(opponent=SimpleNamespace(is_bot=True, name="StockfishBot"))
+    with patch("lib.lichess_bot.matchmaking.stockfish_block_list_contains", return_value=True):
+        assert lichess_bot.get_player_greeting(game, "Hello!", "Hi Stockfish!") == "Hi Stockfish!"
+
+
+def test_other_opponent_keeps_normal_greeting() -> None:
+    """Keep the normal greeting for other opponents."""
+    game = SimpleNamespace(opponent=SimpleNamespace(is_bot=True, name="OtherBot"))
+    with patch("lib.lichess_bot.matchmaking.stockfish_block_list_contains", return_value=False):
+        assert lichess_bot.get_player_greeting(game, "Hello!", "Hi Stockfish!") == "Hello!"
+
+
+def test_game_stream_client_error_is_final() -> None:
+    """Test that ordinary client errors still stop play-game retries."""
+    assert lichess_bot.is_play_game_final(http_error(404))
 def test_rejected_move_submission_is_not_a_stream_error() -> None:
     """Test that a rejected move POST is classified separately from stream errors."""
     response = Response()
