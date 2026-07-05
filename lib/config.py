@@ -234,7 +234,7 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     set_config_default(CONFIG, "challenge", key="ignore_casual_rating", default=False)
     set_config_default(CONFIG, "challenge", key="ignore_casual_human_rating", default=False)
     set_config_default(CONFIG, "challenge", key="max_simultaneous_games_per_user", default=5)
-    set_config_default(CONFIG, "challenge", key="ignore_stockfish_blocklist", default=False)
+    set_config_default(CONFIG, "challenge", key="ignore_stockfish_blocklist", default=True)
     set_config_default(CONFIG, "correspondence", key="checkin_period", default=600)
     set_config_default(CONFIG, "correspondence", key="move_time", default=60, force_empty_values=True)
     set_config_default(CONFIG, "correspondence", key="disconnect_time", default=300)
@@ -242,7 +242,7 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     CONFIG["matchmaking"]["challenge_timeout"] = max(CONFIG["matchmaking"]["challenge_timeout"], 1)
     set_config_default(CONFIG, "matchmaking", key="block_list", default=[], force_empty_values=True)
     set_config_default(CONFIG, "matchmaking", key="online_block_list", default=[], force_empty_values=True)
-    set_config_default(CONFIG, "matchmaking", key="ignore_stockfish_blocklist", default=False)
+    set_config_default(CONFIG, "matchmaking", key="ignore_stockfish_blocklist", default=True)
     set_config_default(CONFIG, "matchmaking", key="include_challenge_block_list", default=False, force_empty_values=True)
     default_filter = (CONFIG.get("matchmaking") or {}).get("delay_after_decline") or FilterType.NONE.value
     set_config_default(CONFIG, "matchmaking", key="challenge_filter", default=default_filter, force_empty_values=True)
@@ -272,6 +272,7 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     for greeting in ["hello", "goodbye"]:
         for target in ["", "_spectators"]:
             set_config_default(CONFIG, "greeting", key=greeting + target, default="", force_empty_values=True)
+    set_config_default(CONFIG, "greeting", key="hello_stockfish", default="Hi Stockfish!", force_empty_values=True)
 
 
 def process_block_list(CONFIG: CONFIG_DICT_TYPE) -> None:

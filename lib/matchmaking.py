@@ -18,7 +18,7 @@ from pathlib import Path
 MULTIPROCESSING_LIST_TYPE: TypeAlias = Sequence[model.Challenge]
 
 logger = logging.getLogger(__name__)
-STOCKFISH_BLOCK_LIST_PATH = Path.home() / ".config" / "enyo" / "stockfish_blocklist.jsonl"
+STOCKFISH_BLOCK_LIST_PATH = Path(__file__).resolve().parents[2] / "stockfish_blocklist.jsonl"
 STOCKFISH_PROFILE_PATTERNS = (
     re.compile(r"\bstockfish\b", re.IGNORECASE),
     re.compile(r"\bsf\s*[-_]?\s*1[0-9]\b", re.IGNORECASE),

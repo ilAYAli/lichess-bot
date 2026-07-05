@@ -31,3 +31,20 @@ def test_config_warn__false(caplog: pytest.LogCaptureFixture) -> None:
         assert "test warning message" in caplog.text
         assert len(caplog.records) == 1
         assert caplog.records[0].levelname == "WARNING"
+
+
+def test_stockfish_defaults_allow_play_and_set_greeting() -> None:
+    """Stockfish bots are played and greeted unless blocking is explicitly enabled."""
+    raw_config = {
+        "engine": {},
+        "challenge": {},
+        "correspondence": {},
+        "matchmaking": {},
+        "greeting": {},
+    }
+
+    config.insert_default_values(raw_config)
+
+    assert raw_config["challenge"]["ignore_stockfish_blocklist"] is True
+    assert raw_config["matchmaking"]["ignore_stockfish_blocklist"] is True
+    assert raw_config["greeting"]["hello_stockfish"] == "Hi Stockfish!"

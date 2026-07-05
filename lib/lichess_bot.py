@@ -896,6 +896,8 @@ def _play_game_once(li: lichess.Lichess,
 
             keyword_map: defaultdict[str, str] = defaultdict(str, me=game.me.name, opponent=game.opponent.name)
             hello = get_greeting("hello", config.greeting, keyword_map)
+            hello_stockfish = get_greeting("hello_stockfish", config.greeting, keyword_map)
+            hello = get_player_greeting(game, hello, hello_stockfish)
             goodbye = get_greeting("goodbye", config.greeting, keyword_map)
             hello_spectators = get_greeting("hello_spectators", config.greeting, keyword_map)
             goodbye_spectators = get_greeting("goodbye_spectators", config.greeting, keyword_map)
@@ -1058,6 +1060,13 @@ def get_greeting(greeting: str, greeting_cfg: Configuration, keyword_map: defaul
     """Get the greeting to send to the chat."""
     greeting_text: str = greeting_cfg.lookup(greeting)
     return greeting_text.format_map(keyword_map)
+
+
+def get_player_greeting(game: model.Game, hello: str, hello_stockfish: str) -> str:
+    """Return the Stockfish greeting for known Stockfish bots."""
+    is_stockfish = (game.opponent.is_bot
+                    and matchmaking.stockfish_block_list_contains(game.opponent.name))
+    return hello_stockfish if is_stockfish else hello
 
 
 def say_hello(conversation: Conversation, hello: str, hello_spectators: str, board: chess.Board) -> None:
