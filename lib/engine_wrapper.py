@@ -269,17 +269,17 @@ class EngineWrapper:
                     logger.info(f"Accepting draw offer: opponent rating diff {rating_diff:+d}, "
                                 f"score {actual(scores[-1])}cp.")
 
-        score_threshold = draw_score_threshold()
         if can_offer_draw and offer_draw_for_zero and enough_pieces_for_offer and self.is_tablebase_draw(result.info):
             result.draw_offered = True
             logger.info("Offering draw: engine reported tablebase draw.")
 
         if can_offer_draw and len(self.scores) >= draw_offer_moves and enough_pieces_for_offer:
             scores = self.scores[-draw_offer_moves:]
+            offer_draw_score = self.draw_or_resign.offer_draw_score
 
-            def score_clearly_losing(score: chess.engine.PovScore) -> bool:
-                return actual(score) <= score_threshold
-            if len(scores) == len(list(filter(score_clearly_losing, scores))):
+            def score_near_draw(score: chess.engine.PovScore) -> bool:
+                return abs(actual(score)) <= offer_draw_score
+            if len(scores) == len(list(filter(score_near_draw, scores))):
                 result.draw_offered = True
 
         resign_enabled = self.draw_or_resign.resign_enabled
