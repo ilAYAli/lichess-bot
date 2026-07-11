@@ -228,6 +228,7 @@ class EngineWrapper:
             return score.relative.score(mate_score=40000)
 
         can_offer_draw = self.draw_or_resign.offer_draw_enabled
+        offer_draw_for_zero = self.draw_or_resign.offer_draw_for_egtb_zero
         draw_offer_moves = self.draw_or_resign.offer_draw_moves
         draw_score_range: int = self.draw_or_resign.offer_draw_score
         draw_max_piece_count = self.draw_or_resign.offer_draw_pieces
@@ -257,6 +258,10 @@ class EngineWrapper:
                     result.draw_offered = True
                     logger.info(f"Accepting draw offer: opponent rating diff {rating_diff:+d}, "
                                 f"score {actual(scores[-1])}cp.")
+
+        if can_offer_draw and offer_draw_for_zero and enough_pieces_for_offer and self.is_tablebase_draw(result.info):
+            result.draw_offered = True
+            logger.info("Offering draw: engine reported tablebase draw.")
 
         if can_offer_draw and len(self.scores) >= draw_offer_moves and enough_pieces_for_offer:
             scores = self.scores[-draw_offer_moves:]
@@ -382,6 +387,15 @@ class EngineWrapper:
                 status = f"{status} DTZ {parts[dtz_index + 1]}"
             return status
         return None
+
+    def is_tablebase_draw(self, info: chess.engine.InfoDict) -> bool:
+        """Check whether Enyo reported the root position as a tablebase draw."""
+        info_string = info.get("string")
+        if not isinstance(info_string, str):
+            return False
+
+        parts = info_string.split()
+        return len(parts) >= 2 and parts[0] == "tbhit" and parts[1] == "draw"
 
     def readable_wdl(self, wdl: chess.engine.PovWdl) -> str:
         """Convert the WDL score to a percentage, so it is more human-readable."""
