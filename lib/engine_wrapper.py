@@ -227,10 +227,18 @@ class EngineWrapper:
         def actual(score: chess.engine.PovScore) -> int:
             return score.relative.score(mate_score=40000)
 
+        def draw_score_threshold() -> int:
+            threshold = self.draw_or_resign.draw_score_threshold
+            if not self.game or self.game.me.rating is None or self.game.opponent.rating is None:
+                return threshold
+            rating_diff = self.game.me.rating - self.game.opponent.rating
+            if rating_diff >= self.draw_or_resign.draw_score_lower_rated_min_diff:
+                return self.draw_or_resign.draw_score_lower_rated_threshold
+            return threshold
+
         can_offer_draw = self.draw_or_resign.offer_draw_enabled
         offer_draw_for_zero = self.draw_or_resign.offer_draw_for_egtb_zero
         draw_offer_moves = self.draw_or_resign.offer_draw_moves
-        draw_score_range: int = self.draw_or_resign.offer_draw_score
         draw_max_piece_count = self.draw_or_resign.offer_draw_pieces
         pieces_on_board = chess.popcount(board.occupied)
         enough_pieces_for_offer = pieces_on_board <= draw_max_piece_count
@@ -238,7 +246,6 @@ class EngineWrapper:
         can_accept_draw = self.draw_or_resign.accept_draw_enabled
         if can_accept_draw and self.game and check_for_draw_offer(self.game):
             accept_draw_moves = self.draw_or_resign.accept_draw_moves
-            accept_draw_score = self.draw_or_resign.accept_draw_score
             accept_draw_max_piece_count = self.draw_or_resign.accept_draw_pieces
             accept_draw_min_rating_diff = self.draw_or_resign.accept_draw_min_rating_diff
             enough_scores = len(self.scores) >= accept_draw_moves
@@ -251,14 +258,18 @@ class EngineWrapper:
                                       or rating_diff >= accept_draw_min_rating_diff))
             if enough_scores and enough_pieces_for_accept and acceptable_rating:
                 scores = self.scores[-accept_draw_moves:]
+                accept_score_threshold = 0
+                if rating_diff is not None and rating_diff < 0:
+                    accept_score_threshold = draw_score_threshold()
 
-                def score_not_clearly_winning(score: chess.engine.PovScore) -> bool:
-                    return actual(score) <= accept_draw_score
-                if len(scores) == len(list(filter(score_not_clearly_winning, scores))):
+                def score_clearly_losing(score: chess.engine.PovScore) -> bool:
+                    return actual(score) <= accept_score_threshold
+                if len(scores) == len(list(filter(score_clearly_losing, scores))):
                     result.draw_offered = True
                     logger.info(f"Accepting draw offer: opponent rating diff {rating_diff:+d}, "
                                 f"score {actual(scores[-1])}cp.")
 
+        score_threshold = draw_score_threshold()
         if can_offer_draw and offer_draw_for_zero and enough_pieces_for_offer and self.is_tablebase_draw(result.info):
             result.draw_offered = True
             logger.info("Offering draw: engine reported tablebase draw.")
@@ -266,9 +277,9 @@ class EngineWrapper:
         if can_offer_draw and len(self.scores) >= draw_offer_moves and enough_pieces_for_offer:
             scores = self.scores[-draw_offer_moves:]
 
-            def score_near_draw(score: chess.engine.PovScore) -> bool:
-                return abs(actual(score)) <= draw_score_range
-            if len(scores) == len(list(filter(score_near_draw, scores))):
+            def score_clearly_losing(score: chess.engine.PovScore) -> bool:
+                return actual(score) <= score_threshold
+            if len(scores) == len(list(filter(score_clearly_losing, scores))):
                 result.draw_offered = True
 
         resign_enabled = self.draw_or_resign.resign_enabled

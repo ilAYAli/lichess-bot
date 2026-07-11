@@ -165,6 +165,9 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     set_config_default(CONFIG, "engine", "draw_or_resign", key="offer_draw_moves", default=5)
     set_config_default(CONFIG, "engine", "draw_or_resign", key="offer_draw_score", default=0)
     set_config_default(CONFIG, "engine", "draw_or_resign", key="offer_draw_pieces", default=10)
+    set_config_default(CONFIG, "engine", "draw_or_resign", key="draw_score_threshold", default=-50)
+    set_config_default(CONFIG, "engine", "draw_or_resign", key="draw_score_lower_rated_threshold", default=-250)
+    set_config_default(CONFIG, "engine", "draw_or_resign", key="draw_score_lower_rated_min_diff", default=200)
     set_config_default(CONFIG, "engine", "draw_or_resign", key="accept_draw_enabled", default=False)
     set_config_default(CONFIG, "engine", "draw_or_resign", key="accept_draw_score", default=100)
     set_config_default(CONFIG, "engine", "draw_or_resign", key="accept_draw_moves", default=1)
@@ -275,6 +278,7 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
         for target in ["", "_spectators"]:
             set_config_default(CONFIG, "greeting", key=greeting + target, default="", force_empty_values=True)
     set_config_default(CONFIG, "greeting", key="hello_stockfish", default="Hi Stockfish!", force_empty_values=True)
+    set_config_default(CONFIG, "greeting", key="hello_stockfish_spectators", default="Hi humans!", force_empty_values=True)
 
 
 def process_block_list(CONFIG: CONFIG_DICT_TYPE) -> None:

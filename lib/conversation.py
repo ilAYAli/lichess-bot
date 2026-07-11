@@ -49,6 +49,7 @@ class Conversation:
         self.player_greeting = ""
         self.spectator_greeting = ""
         self.stockfish_greeting = ""
+        self.stockfish_spectator_greeting = ""
         self.greeting_started = False
         self.greeting_pending = False
         self.greeting_sent = False
@@ -94,7 +95,8 @@ class Conversation:
         expected_prefix = f"{self.game.opponent.name} running ".casefold()
         return line.text.casefold().startswith(expected_prefix)
 
-    def start_greeting(self, player: str, spectator: str, stockfish: str) -> None:
+    def start_greeting(self, player: str, spectator: str, stockfish: str,
+                       stockfish_spectator: str | None = None) -> None:
         """Start greeting, querying an unknown bot's engine before choosing the text."""
         if self.greeting_started:
             return
@@ -103,6 +105,7 @@ class Conversation:
         self.player_greeting = player
         self.spectator_greeting = spectator
         self.stockfish_greeting = stockfish
+        self.stockfish_spectator_greeting = stockfish_spectator or stockfish
 
         if not self.game.opponent.is_bot:
             self.send_normal_greeting()
@@ -135,7 +138,7 @@ class Conversation:
             return
         self.greeting_pending = False
         self.send_message("player", self.stockfish_greeting)
-        self.send_message("spectator", self.stockfish_greeting)
+        self.send_message("spectator", self.stockfish_spectator_greeting)
         self.greeting_sent = True
         self.stockfish_greeting_sent = True
 

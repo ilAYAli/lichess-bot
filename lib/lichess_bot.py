@@ -879,6 +879,7 @@ def play_game(li: lichess.Lichess,
             keyword_map: defaultdict[str, str] = defaultdict(str, me=game.me.name, opponent=game.opponent.name)
             hello = get_greeting("hello", config.greeting, keyword_map)
             hello_stockfish = get_greeting("hello_stockfish", config.greeting, keyword_map)
+            hello_stockfish_spectators = get_greeting("hello_stockfish_spectators", config.greeting, keyword_map)
             goodbye = get_greeting("goodbye", config.greeting, keyword_map)
             hello_spectators = get_greeting("hello_spectators", config.greeting, keyword_map)
             goodbye_spectators = get_greeting("goodbye_spectators", config.greeting, keyword_map)
@@ -907,7 +908,8 @@ def play_game(li: lichess.Lichess,
 
                         if not is_game_over(game) and is_engine_move(game, prior_game, board):
                             disconnect_time = correspondence_disconnect_time
-                            say_hello(conversation, hello, hello_spectators, hello_stockfish, board)
+                            say_hello(conversation, hello, hello_spectators, hello_stockfish,
+                                      hello_stockfish_spectators, board)
                             setup_timer = Timer()
                             print_move_number(board)
                             move_attempted = True
@@ -1098,10 +1100,11 @@ def say_hello(conversation: Conversation,
               hello: str,
               hello_spectators: str,
               hello_stockfish: str,
+              hello_stockfish_spectators: str,
               board: chess.Board) -> None:
     """Send the greetings to the chat rooms."""
     if len(board.move_stack) < 2:
-        conversation.start_greeting(hello, hello_spectators, hello_stockfish)
+        conversation.start_greeting(hello, hello_spectators, hello_stockfish, hello_stockfish_spectators)
 
 
 def fake_think_time(config: Configuration, board: chess.Board, game: model.Game) -> datetime.timedelta:
