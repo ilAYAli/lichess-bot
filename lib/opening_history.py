@@ -44,6 +44,9 @@ CREATE INDEX IF NOT EXISTS games_opponent_played_at
     ON games(opponent COLLATE NOCASE, played_at DESC);
 CREATE INDEX IF NOT EXISTS games_opening
     ON games(eco, opening);
+UPDATE games
+SET bot_result = 'timeout', bot_score = NULL
+WHERE bot_result = 'loss' AND termination = 'Time forfeit' COLLATE NOCASE;
 """
 
 UPSERT = """
@@ -139,7 +142,11 @@ def games_against_opponent(database: str | Path,
         return []
 
     query = """
-        SELECT game_id, site, bot_color, bot_rating, opponent_rating, bot_result,
+        SELECT game_id, site, bot_color, bot_rating, opponent_rating,
+               CASE
+                   WHEN bot_result = 'loss' AND termination = 'Time forfeit' COLLATE NOCASE THEN 'timeout'
+                   ELSE bot_result
+               END AS opening_result,
                eco, opening, variation, opening_san, played_at
         FROM games
         WHERE bot_username = ? COLLATE NOCASE
@@ -169,7 +176,7 @@ def moves_to_avoid(database: str | Path,
     path = Path(database).expanduser()
     criteria: list[str] = []
     if avoid_loss_openings:
-        criteria.append("bot_result = 'loss'")
+        criteria.append("(bot_result = 'loss' AND termination != 'Time forfeit' COLLATE NOCASE)")
     if avoid_draw_openings_vs_lower_rated_bots:
         criteria.append("""(bot_result = 'draw'
                          AND opponent_is_bot = 1
@@ -243,7 +250,8 @@ def game_row(game_id: str,
         board.push(move)
 
     result = headers.get("Result", "*")
-    bot_result = result_for_bot(result, bot_color)
+    termination = headers.get("Termination", "")
+    bot_result = result_for_bot(result, bot_color, termination)
     return {
         "game_id": game_id,
         "site": headers.get("Site", ""),
@@ -256,7 +264,7 @@ def game_row(game_id: str,
         "result": result,
         "bot_result": bot_result,
         "bot_score": score_for_bot(bot_result),
-        "termination": headers.get("Termination", ""),
+        "termination": termination,
         "rated": int(headers.get("Event", "").casefold().startswith("rated ")),
         "variant": headers.get("Variant", "Standard"),
         "time_control": headers.get("TimeControl", ""),
@@ -282,14 +290,16 @@ def integer_header(value: str | None) -> int | None:
         return None
 
 
-def result_for_bot(result: str, bot_color: str) -> str:
+def result_for_bot(result: str, bot_color: str, termination: str = "") -> str:
     """Return the result from the configured bot's perspective."""
     if result == "1/2-1/2":
         return "draw"
     if result == "1-0":
-        return "win" if bot_color == "white" else "loss"
+        bot_result = "win" if bot_color == "white" else "loss"
+        return "timeout" if bot_result == "loss" and termination.casefold() == "time forfeit" else bot_result
     if result == "0-1":
-        return "win" if bot_color == "black" else "loss"
+        bot_result = "win" if bot_color == "black" else "loss"
+        return "timeout" if bot_result == "loss" and termination.casefold() == "time forfeit" else bot_result
     return "incomplete"
 
 

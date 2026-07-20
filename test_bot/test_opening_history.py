@@ -160,6 +160,51 @@ def test_moves_to_avoid_draw_against_lower_rated_bot(tmp_path: Path) -> None:
                                               avoid_draw_openings_vs_lower_rated_bots=False)
 
 
+def test_time_forfeit_is_not_a_lost_opening(tmp_path: Path) -> None:
+    """Keep a timeout for audit without treating it as an opening loss."""
+    database = tmp_path / "opening_history.sqlite3"
+    timeout_pgn = (PGN.replace('[Result "0-1"]', '[Result "1-0"]')
+                      .replace('[Termination "Normal"]', '[Termination "Time forfeit"]')
+                      .replace("6. c4 O-O 0-1", "6. c4 O-O 1-0"))
+    assert opening_history.record_game(database, "timeout1234", timeout_pgn,
+                                       "EnyoV2", opening_ply_limit=8)
+
+    with sqlite3.connect(database) as connection:
+        bot_result, bot_score = connection.execute(
+            "SELECT bot_result, bot_score FROM games WHERE game_id = 'timeout1234'"
+        ).fetchone()
+
+    board = chess.Board()
+    board.push_uci("d2d4")
+    matches = opening_history.moves_to_avoid(database,
+                                             "EnyoV2",
+                                             "KingzBot",
+                                             "black",
+                                             "Standard",
+                                             board,
+                                             avoid_loss_openings=True,
+                                             avoid_draw_openings_vs_lower_rated_bots=False)
+
+    assert bot_result == "timeout"
+    assert bot_score is None
+    assert not matches
+
+
+def test_schema_migrates_legacy_time_forfeit_loss(tmp_path: Path) -> None:
+    """Repair timeout rows written before the dedicated result existed."""
+    database = tmp_path / "opening_history.sqlite3"
+    loss_pgn = PGN.replace('[Result "0-1"]', '[Result "1-0"]').replace("6. c4 O-O 0-1", "6. c4 O-O 1-0")
+    assert opening_history.record_game(database, "legacy", loss_pgn, "EnyoV2")
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE games SET termination = 'Time forfeit' WHERE game_id = 'legacy'")
+
+    assert opening_history.record_game(database, "trigger", PGN, "EnyoV2")
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT bot_result, bot_score FROM games WHERE game_id = 'legacy'"
+        ).fetchone() == ("timeout", None)
+
+
 def test_record_game_is_idempotent(tmp_path: Path) -> None:
     """Update an existing game instead of creating a duplicate after a reconnect."""
     database = tmp_path / "opening_history.sqlite3"
@@ -188,11 +233,14 @@ def test_result_for_bot() -> None:
     assert opening_history.result_for_bot("1-0", "white") == "win"
     assert opening_history.result_for_bot("1-0", "black") == "loss"
     assert opening_history.result_for_bot("0-1", "black") == "win"
+    assert opening_history.result_for_bot("1-0", "black", "Time forfeit") == "timeout"
+    assert opening_history.result_for_bot("0-1", "white", "Time forfeit") == "timeout"
     assert opening_history.result_for_bot("1/2-1/2", "white") == "draw"
     assert opening_history.result_for_bot("*", "white") == "incomplete"
     assert opening_history.score_for_bot("win") == 1.0
     assert opening_history.score_for_bot("draw") == 0.5
     assert opening_history.score_for_bot("loss") == 0.0
+    assert opening_history.score_for_bot("timeout") is None
     assert opening_history.score_for_bot("incomplete") is None
 
 
