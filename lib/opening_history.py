@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime
 import io
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 import chess
@@ -86,6 +87,23 @@ ON CONFLICT(game_id) DO UPDATE SET
 """
 
 
+@dataclass(frozen=True)
+class GameSummary:
+    """One recorded game displayed when meeting an opponent again."""
+
+    game_id: str
+    site: str
+    bot_color: str
+    bot_rating: int | None
+    opponent_rating: int | None
+    bot_result: str
+    eco: str
+    opening: str
+    variation: str
+    opening_san: str
+    played_at: str
+
+
 def record_game(database: str | Path,
                 game_id: str,
                 pgn: str,
@@ -109,6 +127,34 @@ def record_game(database: str | Path,
         connection.executescript(SCHEMA)
         connection.execute(UPSERT, row)
     return True
+
+
+def games_against_opponent(database: str | Path,
+                           bot_username: str,
+                           opponent: str,
+                           variant: str) -> list[GameSummary]:
+    """Return completed games against an opponent in newest-first order."""
+    path = Path(database).expanduser()
+    if not path.is_file():
+        return []
+
+    query = """
+        SELECT game_id, site, bot_color, bot_rating, opponent_rating, bot_result,
+               eco, opening, variation, opening_san, played_at
+        FROM games
+        WHERE bot_username = ? COLLATE NOCASE
+          AND opponent = ? COLLATE NOCASE
+          AND variant = ? COLLATE NOCASE
+          AND bot_result != 'incomplete'
+        ORDER BY played_at DESC, recorded_at DESC
+    """
+    try:
+        with sqlite3.connect(path, timeout=1) as connection:
+            rows = connection.execute(query, (bot_username, opponent, variant)).fetchall()
+    except sqlite3.Error:
+        return []
+
+    return [GameSummary(*row) for row in rows]
 
 
 def moves_to_avoid(database: str | Path,

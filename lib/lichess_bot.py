@@ -878,6 +878,7 @@ def play_game(li: lichess.Lichess,
             conversation = Conversation(game, engine, li, __version__, challenge_queue)
 
             logger.info(f"+++ {game}")
+            log_opening_history(config, game)
 
             is_correspondence = game.speed == "correspondence"
             correspondence_cfg = config.correspondence
@@ -1207,6 +1208,39 @@ def opening_moves_to_avoid(config: Configuration,
         logger.info(f"Avoiding opening move(s) {moves} against {game.opponent.name}; "
                     f"matched previous game(s) {game_ids} with criteria {', '.join(criteria)}.")
     return set(matches)
+
+
+def log_opening_history(config: Configuration, game: model.Game) -> None:
+    """Log prior openings and outcomes when meeting an opponent again."""
+    history_config = config.opening_history
+    if not history_config.enabled:
+        return
+
+    records = opening_history.games_against_opponent(history_config.database,
+                                                     game.me.name,
+                                                     game.opponent.name,
+                                                     game.variant_name)
+    if not records:
+        logger.info(f"No recorded opening history against {game.opponent.name} in {game.variant_name}.")
+        return
+
+    game_label = "game" if len(records) == 1 else "games"
+    logger.info(f"Opening history against {game.opponent.name} "
+                f"({len(records)} prior {game.variant_name} {game_label}, newest first):")
+    for record in records:
+        opening = " ".join(part for part in (record.eco, record.opening) if part)
+        if record.variation:
+            opening = f"{opening} ({record.variation})" if opening else record.variation
+        if not opening:
+            opening = record.opening_san or "unknown opening"
+
+        ratings = ""
+        if record.bot_rating is not None and record.opponent_rating is not None:
+            ratings = (f"; ratings {game.me.name} {record.bot_rating}, "
+                       f"{game.opponent.name} {record.opponent_rating}")
+        reference = record.site or record.game_id
+        logger.info(f"  {record.bot_result.upper()} as {record.bot_color.title()}: "
+                    f"{opening}{ratings}; {reference}")
 
 
 def is_engine_move(game: model.Game, prior_game: model.Game | None, board: chess.Board) -> bool:

@@ -65,6 +65,28 @@ def test_record_game_stores_opening_and_opponent(tmp_path: Path) -> None:
     assert journal_mode == "wal"
 
 
+def test_games_against_opponent_are_newest_first(tmp_path: Path) -> None:
+    """List only the requested opponent and variant with display metadata."""
+    database = tmp_path / "opening_history.sqlite3"
+    older_pgn = PGN.replace('[UTCTime "12:34:56"]', '[UTCTime "11:00:00"]')
+    newer_pgn = (PGN.replace('[UTCTime "12:34:56"]', '[UTCTime "13:00:00"]')
+                    .replace('[Opening "Queen\'s Pawn Game: Colle System"]',
+                             '[Opening "Indian Game"]'))
+    other_opponent_pgn = PGN.replace('KingzBot', 'OtherBot')
+    assert opening_history.record_game(database, "older", older_pgn, "EnyoV2")
+    assert opening_history.record_game(database, "newer", newer_pgn, "EnyoV2")
+    assert opening_history.record_game(database, "other", other_opponent_pgn, "EnyoV2")
+
+    records = opening_history.games_against_opponent(database, "enyov2", "kingzbot", "standard")
+
+    assert [record.game_id for record in records] == ["newer", "older"]
+    assert records[0].opening == "Indian Game"
+    assert records[0].bot_result == "win"
+    assert records[0].bot_color == "black"
+    assert records[0].bot_rating == 2861
+    assert records[0].opponent_rating == 2908
+
+
 def test_moves_to_avoid_continuing_a_loss_against_same_opponent(tmp_path: Path) -> None:
     """Block only the next move of a matching losing line."""
     database = tmp_path / "opening_history.sqlite3"
@@ -220,6 +242,31 @@ def test_completed_game_records_before_completion_signal(tmp_path: Path, caplog)
             "Queen's Pawn Game: Colle System",
         )
     assert f"Recorded opening history for game1234 in {database}." in caplog.text
+
+
+def test_game_start_logs_opening_history(tmp_path: Path, caplog) -> None:
+    """Show prior opening results locally when a game starts."""
+    database = tmp_path / "opening_history.sqlite3"
+    assert opening_history.record_game(database, "game1234", PGN, "EnyoV2")
+    config = Configuration({
+        "opening_history": {
+            "enabled": True,
+            "database": str(database),
+        },
+    })
+    game = SimpleNamespace(
+        me=SimpleNamespace(name="EnyoV2"),
+        opponent=SimpleNamespace(name="KingzBot"),
+        variant_name="Standard",
+    )
+
+    with caplog.at_level(logging.INFO):
+        lichess_bot.log_opening_history(config, game)
+
+    assert "Opening history against KingzBot (1 prior Standard game, newest first):" in caplog.text
+    assert ("WIN as Black: D05 Queen's Pawn Game: Colle System; "
+            "ratings EnyoV2 2861, KingzBot 2908; "
+            "https://lichess.org/game1234") in caplog.text
 
 
 def test_completed_record_is_queued_before_game_done() -> None:
