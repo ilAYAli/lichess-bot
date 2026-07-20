@@ -877,7 +877,7 @@ def play_game(li: lichess.Lichess,
             logger.debug(f"The engine for game {game_id} has pid={engine.get_pid()}")
             conversation = Conversation(game, engine, li, __version__, challenge_queue)
 
-            logger.info(f"+++ {game}")
+            logger.warning(f"+++ {game}")
             log_opening_history(config, game)
 
             is_correspondence = game.speed == "correspondence"
@@ -1205,8 +1205,8 @@ def opening_moves_to_avoid(config: Configuration,
         criteria = ["loss"] if avoid_loss_openings else []
         if avoid_lower_rated_draws:
             criteria.append("draw against a lower-rated bot")
-        logger.info(f"Avoiding opening move(s) {moves} against {game.opponent.name}; "
-                    f"matched previous game(s) {game_ids} with criteria {', '.join(criteria)}.")
+        logger.warning(f"Avoiding opening move(s) {moves} against {game.opponent.name}; "
+                       f"matched previous game(s) {game_ids} with criteria {', '.join(criteria)}.")
     return set(matches)
 
 
@@ -1221,12 +1221,12 @@ def log_opening_history(config: Configuration, game: model.Game) -> None:
                                                      game.opponent.name,
                                                      game.variant_name)
     if not records:
-        logger.info(f"No recorded opening history against {game.opponent.name} in {game.variant_name}.")
+        logger.warning(f"No recorded opening history against {game.opponent.name} in {game.variant_name}.")
         return
 
     game_label = "game" if len(records) == 1 else "games"
-    logger.info(f"Opening history against {game.opponent.name} "
-                f"({len(records)} prior {game.variant_name} {game_label}, newest first):")
+    lines = [f"Opening history against {game.opponent.name} "
+             f"({len(records)} prior {game.variant_name} {game_label}, newest first):"]
     for record in records:
         opening = " ".join(part for part in (record.eco, record.opening) if part)
         if record.variation:
@@ -1239,8 +1239,10 @@ def log_opening_history(config: Configuration, game: model.Game) -> None:
             ratings = (f"; ratings {game.me.name} {record.bot_rating}, "
                        f"{game.opponent.name} {record.opponent_rating}")
         reference = record.site or record.game_id
-        logger.info(f"  {record.bot_result.upper()} as {record.bot_color.title()}: "
-                    f"{opening}{ratings}; {reference}")
+        lines.append(f"  {record.bot_result.upper()} as {record.bot_color.title()}: "
+                     f"{opening}{ratings}; {reference}")
+
+    logger.warning("\n".join(lines))
 
 
 def is_engine_move(game: model.Game, prior_game: model.Game | None, board: chess.Board) -> bool:

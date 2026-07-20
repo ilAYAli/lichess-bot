@@ -311,10 +311,37 @@ def test_game_start_logs_opening_history(tmp_path: Path, caplog) -> None:
     with caplog.at_level(logging.INFO):
         lichess_bot.log_opening_history(config, game)
 
-    assert "Opening history against KingzBot (1 prior Standard game, newest first):" in caplog.text
-    assert ("WIN as Black: D05 Queen's Pawn Game: Colle System; "
+    assert ("Opening history against KingzBot (1 prior Standard game, newest first):\n"
+            "  WIN as Black: D05 Queen's Pawn Game: Colle System; "
             "ratings EnyoV2 2861, KingzBot 2908; "
             "https://lichess.org/game1234") in caplog.text
+    history_records = [record for record in caplog.records
+                       if "Opening history against" in record.message]
+    assert len(history_records) == 1
+    assert all(record.levelno == logging.WARNING for record in history_records)
+
+
+def test_game_start_warns_when_opening_history_is_empty(tmp_path: Path, caplog) -> None:
+    """Make the absence of opponent history visible when a game starts."""
+    config = Configuration({
+        "opening_history": {
+            "enabled": True,
+            "database": str(tmp_path / "opening_history.sqlite3"),
+        },
+    })
+    game = SimpleNamespace(
+        me=SimpleNamespace(name="EnyoV2"),
+        opponent=SimpleNamespace(name="NewOpponent"),
+        variant_name="Standard",
+    )
+
+    with caplog.at_level(logging.INFO):
+        lichess_bot.log_opening_history(config, game)
+
+    records = [record for record in caplog.records
+               if "No recorded opening history" in record.message]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
 
 
 def test_completed_record_is_queued_before_game_done() -> None:
