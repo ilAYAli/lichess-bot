@@ -4,7 +4,6 @@ from __future__ import annotations
 import datetime
 import io
 import sqlite3
-from collections.abc import Iterable
 from pathlib import Path
 
 import chess
@@ -118,16 +117,14 @@ def moves_to_avoid(database: str | Path,
                    bot_color: str,
                    variant: str,
                    board: chess.Board,
-                   avoid_results: Iterable[str],
-                   avoid_draws_against_lower_rated_bots: bool = False) -> dict[chess.Move, list[str]]:
+                   avoid_loss_openings: bool,
+                   avoid_draw_openings_vs_lower_rated_bots: bool) -> dict[chess.Move, list[str]]:
     """Return next moves that would continue a matching historical opening line."""
     path = Path(database).expanduser()
-    results = tuple(dict.fromkeys(avoid_results))
     criteria: list[str] = []
-    if results:
-        placeholders = ", ".join("?" for _ in results)
-        criteria.append(f"bot_result IN ({placeholders})")
-    if avoid_draws_against_lower_rated_bots:
+    if avoid_loss_openings:
+        criteria.append("bot_result = 'loss'")
+    if avoid_draw_openings_vs_lower_rated_bots:
         criteria.append("""(bot_result = 'draw'
                          AND opponent_is_bot = 1
                          AND bot_rating IS NOT NULL
@@ -145,7 +142,7 @@ def moves_to_avoid(database: str | Path,
           AND variant = ? COLLATE NOCASE
           AND ({" OR ".join(criteria)})
     """
-    parameters = (bot_username, opponent, bot_color, variant, *results)
+    parameters = (bot_username, opponent, bot_color, variant)
     try:
         with sqlite3.connect(path, timeout=1) as connection:
             rows = connection.execute(query, parameters).fetchall()

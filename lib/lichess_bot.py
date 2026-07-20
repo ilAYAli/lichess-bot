@@ -1185,8 +1185,9 @@ def opening_moves_to_avoid(config: Configuration,
                            board: chess.Board) -> set[chess.Move]:
     """Find historical moves that would continue a configured result line."""
     history_config = config.opening_history
-    avoid_lower_rated_draws = history_config.avoid_draws_against_lower_rated_bots
-    if not history_config.enabled or (not history_config.avoid_results and not avoid_lower_rated_draws):
+    avoid_loss_openings = history_config.avoid_loss_openings
+    avoid_lower_rated_draws = history_config.avoid_draw_openings_vs_lower_rated_bots
+    if not history_config.enabled or (not avoid_loss_openings and not avoid_lower_rated_draws):
         return set()
 
     matches = opening_history.moves_to_avoid(history_config.database,
@@ -1195,12 +1196,12 @@ def opening_moves_to_avoid(config: Configuration,
                                              game.my_color,
                                              game.variant_name,
                                              board,
-                                             history_config.avoid_results,
+                                             avoid_loss_openings,
                                              avoid_lower_rated_draws)
     if matches:
         moves = ", ".join(sorted(move.uci() for move in matches))
         game_ids = ", ".join(sorted({game_id for ids in matches.values() for game_id in ids}))
-        criteria = list(history_config.avoid_results)
+        criteria = ["loss"] if avoid_loss_openings else []
         if avoid_lower_rated_draws:
             criteria.append("draw against a lower-rated bot")
         logger.info(f"Avoiding opening move(s) {moves} against {game.opponent.name}; "

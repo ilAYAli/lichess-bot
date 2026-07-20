@@ -154,9 +154,8 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     set_config_default(CONFIG, "opening_history", key="database", default="opening_history.sqlite3",
                        force_empty_values=True)
     set_config_default(CONFIG, "opening_history", key="opening_plies", default=20, force_empty_values=True)
-    set_config_default(CONFIG, "opening_history", key="avoid_results", default=[], force_empty_values=True)
-    set_config_default(CONFIG, "opening_history", key="avoid_draws_against_lower_rated_bots", default=True)
-    change_value_to_list(CONFIG, "opening_history", key="avoid_results")
+    set_config_default(CONFIG, "opening_history", key="avoid_loss_openings", default=True)
+    set_config_default(CONFIG, "opening_history", key="avoid_draw_openings_vs_lower_rated_bots", default=True)
     set_config_default(CONFIG, key="max_takebacks_accepted", default=0, force_empty_values=True)
     set_config_default(CONFIG, "engine", key="interpreter", default=None)
     set_config_default(CONFIG, "engine", key="interpreter_options", default=[], force_empty_values=True)
@@ -408,12 +407,10 @@ def validate_config(CONFIG: CONFIG_DICT_TYPE) -> None:
                   "opening_history.database must be a non-empty path string.")
     config_assert(type(opening_history["opening_plies"]) is int and opening_history["opening_plies"] > 0,
                   "opening_history.opening_plies must be a positive integer.")
-    valid_opening_results = {"win", "draw", "loss"}
-    config_assert(all(isinstance(result, str) and result in valid_opening_results
-                      for result in opening_history["avoid_results"]),
-                  f"opening_history.avoid_results entries must be in {sorted(valid_opening_results)}.")
-    config_assert(isinstance(opening_history["avoid_draws_against_lower_rated_bots"], bool),
-                  "opening_history.avoid_draws_against_lower_rated_bots must be true or false.")
+    config_assert(isinstance(opening_history["avoid_loss_openings"], bool),
+                  "opening_history.avoid_loss_openings must be true or false.")
+    config_assert(isinstance(opening_history["avoid_draw_openings_vs_lower_rated_bots"], bool),
+                  "opening_history.avoid_draw_openings_vs_lower_rated_bots must be true or false.")
 
     def has_valid_list(name: str) -> bool:
         entries = matchmaking.get(name)

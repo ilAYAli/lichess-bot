@@ -79,7 +79,8 @@ def test_moves_to_avoid_continuing_a_loss_against_same_opponent(tmp_path: Path) 
                                              "black",
                                              "standard",
                                              board,
-                                             ["loss"])
+                                             avoid_loss_openings=True,
+                                             avoid_draw_openings_vs_lower_rated_bots=False)
 
     assert matches == {chess.Move.from_uci("g8f6"): ["loss1234"]}
     assert not opening_history.moves_to_avoid(database,
@@ -88,7 +89,8 @@ def test_moves_to_avoid_continuing_a_loss_against_same_opponent(tmp_path: Path) 
                                               "black",
                                               "Standard",
                                               board,
-                                              ["win"])
+                                              avoid_loss_openings=False,
+                                              avoid_draw_openings_vs_lower_rated_bots=False)
 
     board.push_uci("d7d5")
     assert not opening_history.moves_to_avoid(database,
@@ -97,7 +99,8 @@ def test_moves_to_avoid_continuing_a_loss_against_same_opponent(tmp_path: Path) 
                                               "black",
                                               "Standard",
                                               board,
-                                              ["loss"])
+                                              avoid_loss_openings=True,
+                                              avoid_draw_openings_vs_lower_rated_bots=False)
 
 
 def test_moves_to_avoid_draw_against_lower_rated_bot(tmp_path: Path) -> None:
@@ -121,8 +124,8 @@ def test_moves_to_avoid_draw_against_lower_rated_bot(tmp_path: Path) -> None:
                                              "black",
                                              "Standard",
                                              board,
-                                             [],
-                                             avoid_draws_against_lower_rated_bots=True)
+                                             avoid_loss_openings=False,
+                                             avoid_draw_openings_vs_lower_rated_bots=True)
 
     assert matches == {chess.Move.from_uci("g8f6"): ["lowerbot"]}
     assert not opening_history.moves_to_avoid(database,
@@ -131,8 +134,8 @@ def test_moves_to_avoid_draw_against_lower_rated_bot(tmp_path: Path) -> None:
                                               "black",
                                               "Standard",
                                               board,
-                                              [],
-                                              avoid_draws_against_lower_rated_bots=False)
+                                              avoid_loss_openings=False,
+                                              avoid_draw_openings_vs_lower_rated_bots=False)
 
 
 def test_record_game_is_idempotent(tmp_path: Path) -> None:

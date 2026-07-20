@@ -65,6 +65,6 @@ def test_stockfish_defaults_allow_play_and_set_greeting() -> None:
         "enabled": False,
         "database": "opening_history.sqlite3",
         "opening_plies": 20,
-        "avoid_results": [],
-        "avoid_draws_against_lower_rated_bots": True,
+        "avoid_loss_openings": True,
+        "avoid_draw_openings_vs_lower_rated_bots": True,
     }
