@@ -203,6 +203,12 @@ greeting:
                                    # "opponent" - every game with a given opponent is written to a file named "{Bot_name}_games_vs._{Opponent_name}.pgn"
                                    # "all" - every game is written to a single file named "{Bot_name}_games.pgn"
 
+opening_history:
+  enabled: false                  # Record completed games and their openings in a local SQLite database.
+  database: "opening_history.sqlite3" # SQLite path, relative to lichess-bot's working directory.
+  opening_plies: 20               # Number of half-moves to retain as the opening line.
+  avoid_results: []               # Avoid replaying a stored line against the same opponent and color (win/draw/loss).
+
 matchmaking:
   allow_matchmaking: false         # Set it to 'true' to challenge other bots.
   allow_during_games: false        # Set it to 'true' to create challenges during long games.

@@ -250,6 +250,16 @@ def test_non_move_post_keeps_transient_retry() -> None:
     assert post.call_count == 2
 
 
+def test_game_pgn_requests_opening_tags() -> None:
+    """Ask Lichess to include ECO and opening-name headers in exported PGN."""
+    li = mock_lichess()
+
+    with patch.object(li, "api_get_raw", return_value="pgn") as get_raw:
+        assert li.get_game_pgn("gameid") == "pgn"
+
+    get_raw.assert_called_once_with("export", "gameid", params={"opening": "true"})
+
+
 def test_lichess() -> None:
     """Test the lichess communication."""
     token = os.environ.get("LICHESS_BOT_TEST_TOKEN")

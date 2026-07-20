@@ -85,6 +85,31 @@ PONDERPV_CHARACTERS = 6  # The length of ", Pv: ".
 FIRST_MOVE_SEARCH_TIME = seconds(1)
 
 
+def apply_move_exclusions(best_move: MOVE,
+                          board: chess.Board,
+                          excluded_moves: set[chess.Move]) -> MOVE:
+    """Prevent book, online, and engine choices from continuing a blocked opening line."""
+    if not excluded_moves:
+        return best_move
+
+    legal_moves = list(board.legal_moves)
+    blocked_moves = excluded_moves.intersection(legal_moves)
+    if not blocked_moves:
+        return best_move
+
+    allowed_moves = [move for move in legal_moves if move not in blocked_moves]
+    if not allowed_moves:
+        logger.warning("Cannot avoid opening history because every legal move is blocked.")
+        return best_move
+
+    if isinstance(best_move, list):
+        allowed_suggestions = [move for move in best_move if move not in blocked_moves]
+        return allowed_suggestions or allowed_moves
+    if best_move.move is None or best_move.move in blocked_moves:
+        return allowed_moves
+    return best_move
+
+
 class EngineWrapper:
     """A wrapper used by all engines (UCI, XBoard, Homemade)."""
 
@@ -142,7 +167,8 @@ class EngineWrapper:
                   is_correspondence: bool,
                   correspondence_move_time: datetime.timedelta,
                   engine_cfg: Configuration,
-                  min_time: datetime.timedelta) -> None:
+                  min_time: datetime.timedelta,
+                  excluded_moves: set[chess.Move] | None = None) -> None:
         """
         Play a move.
 
@@ -156,6 +182,7 @@ class EngineWrapper:
         :param correspondence_move_time: The time the engine will think if `is_correspondence` is true.
         :param engine_cfg: Options for external moves (e.g. from an opening book), and for engine resignation and draw offers.
         :param min_time: Minimum time to spend, in seconds.
+        :param excluded_moves: Legal opening moves that must not be replayed in this game.
         :return: The move to play.
         """
         polyglot_cfg = engine_cfg.polyglot
@@ -179,6 +206,8 @@ class EngineWrapper:
                                         game,
                                         online_moves_cfg,
                                         draw_or_resign_cfg)
+
+        best_move = apply_move_exclusions(best_move, board, excluded_moves or set())
 
         if isinstance(best_move, list) or best_move.move is None:
             draw_offered = check_for_draw_offer(game)
@@ -227,6 +256,33 @@ class EngineWrapper:
         def actual(score: chess.engine.PovScore) -> int:
             return score.relative.score(mate_score=40000)
 
+        def relative_wdl(info: chess.engine.InfoDict) -> chess.engine.Wdl | None:
+            wdl = info.get("wdl")
+            if isinstance(wdl, chess.engine.PovWdl):
+                return wdl.relative
+
+            score = info.get("score")
+            if isinstance(score, chess.engine.PovScore):
+                return score.wdl(model="sf", ply=board.ply()).relative
+
+            if self.scores:
+                return self.scores[-1].wdl(model="sf", ply=board.ply()).relative
+
+            return None
+
+        def wdl_unfavorable(info: chess.engine.InfoDict) -> bool:
+            wdl = relative_wdl(info)
+            return wdl is not None and wdl.losses > wdl.wins
+
+        def position_stuck() -> bool:
+            if board.can_claim_draw():
+                return True
+            if result.move not in board.legal_moves:
+                return False
+            next_board = board.copy(stack=True)
+            next_board.push(result.move)
+            return next_board.can_claim_draw()
+
         def draw_score_threshold() -> int:
             threshold = self.draw_or_resign.draw_score_threshold
             if not self.game or self.game.me.rating is None or self.game.opponent.rating is None:
@@ -238,7 +294,6 @@ class EngineWrapper:
 
         can_offer_draw = self.draw_or_resign.offer_draw_enabled
         offer_draw_for_zero = self.draw_or_resign.offer_draw_for_egtb_zero
-        draw_offer_moves = self.draw_or_resign.offer_draw_moves
         draw_max_piece_count = self.draw_or_resign.offer_draw_pieces
         pieces_on_board = chess.popcount(board.occupied)
         enough_pieces_for_offer = pieces_on_board <= draw_max_piece_count
@@ -269,18 +324,17 @@ class EngineWrapper:
                     logger.info(f"Accepting draw offer: opponent rating diff {rating_diff:+d}, "
                                 f"score {actual(scores[-1])}cp.")
 
-        if can_offer_draw and offer_draw_for_zero and enough_pieces_for_offer and self.is_tablebase_draw(result.info):
+        if can_offer_draw and offer_draw_for_zero and self.is_tablebase_draw(result.info):
             result.draw_offered = True
             logger.info("Offering draw: engine reported tablebase draw.")
 
-        if can_offer_draw and len(self.scores) >= draw_offer_moves and enough_pieces_for_offer:
-            scores = self.scores[-draw_offer_moves:]
-            offer_draw_score = self.draw_or_resign.offer_draw_score
+        if can_offer_draw and enough_pieces_for_offer and wdl_unfavorable(result.info):
+            result.draw_offered = True
+            logger.info("Offering draw: WDL is unfavorable.")
 
-            def score_near_draw(score: chess.engine.PovScore) -> bool:
-                return abs(actual(score)) <= offer_draw_score
-            if len(scores) == len(list(filter(score_near_draw, scores))):
-                result.draw_offered = True
+        if can_offer_draw and position_stuck():
+            result.draw_offered = True
+            logger.info("Offering draw: position is claimably drawn.")
 
         resign_enabled = self.draw_or_resign.resign_enabled
         min_moves_for_resign = self.draw_or_resign.resign_moves

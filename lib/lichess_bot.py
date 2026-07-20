@@ -3,7 +3,7 @@ import argparse
 import chess
 import chess.pgn
 from chess.variant import find_variant
-from lib import engine_wrapper, model, lichess, matchmaking
+from lib import engine_wrapper, model, lichess, matchmaking, opening_history
 import json
 import logging
 import logging.handlers
@@ -151,21 +151,26 @@ def do_correspondence_ping(control_queue: CONTROL_QUEUE_TYPE, period: datetime.t
         control_queue.put_nowait({"type": "correspondence_ping"})
 
 
-def write_pgn_records(pgn_queue: PGN_QUEUE_TYPE, config: Configuration, username: str) -> None:
-    """Write PGN records to files as games finish."""
+def write_pgn_records(pgn_queue: PGN_QUEUE_TYPE,
+                      config: Configuration,
+                      username: str,
+                      logging_queue: LOGGING_QUEUE_TYPE | None = None) -> None:
+    """Write PGN files as games finish."""
+    if logging_queue is not None:
+        thread_logging_configurer(logging_queue)
     while True:
-        mark_task_done = False
         try:
             event = pgn_queue.get()
-            mark_task_done = True
-            if event:
-                save_pgn_record(event, config, username)
         except InterruptedError:
-            pass
-        except Exception:
-            logger.exception("Could not write PGN to file")
+            continue
 
-        if mark_task_done:
+        try:
+            if event is None:
+                return
+            save_pgn_record(event, config, username)
+        except Exception:
+            logger.exception("Could not process completed game record")
+        finally:
             pgn_queue.task_done()
 
 
@@ -290,7 +295,8 @@ def start(li: lichess.Lichess, user_profile: UserProfileType, config: Configurat
     pgn_listener = multiprocessing.Process(target=write_pgn_records,
                                            args=(pgn_queue,
                                                  config,
-                                                 user_profile["username"]))
+                                                 user_profile["username"],
+                                                 logging_queue))
     pgn_listener.start()
 
     thread_logging_configurer(logging_queue)
@@ -312,12 +318,16 @@ def start(li: lichess.Lichess, user_profile: UserProfileType, config: Configurat
         control_stream.join()
         correspondence_pinger.terminate()
         correspondence_pinger.join()
+        with contextlib.suppress(Exception):
+            pgn_queue.put_nowait(None)
+        pgn_listener.join(timeout=10)
+        if pgn_listener.is_alive():
+            pgn_listener.terminate()
+            pgn_listener.join()
         time.sleep(1.0)  # Allow final messages in logging_queue to be handled.
         logging_configurer(logging_level, log_filename, disable_auto_logging)
         logging_listener.terminate()
         logging_listener.join()
-        pgn_listener.terminate()
-        pgn_listener.join()
 
 
 def log_proc_count(change: str, active_games: dict[str, str]) -> None:
@@ -708,11 +718,18 @@ def start_game_thread(active_games: dict[str, str], game_id: str, opponent_name:
         pgn_queue = play_game_args["pgn_queue"]
         li = play_game_args["li"]
         config = play_game_args["config"]
-        pgn = li.get_game_pgn(game_id) if config.save_pgn else ""
-        control_queue.put_nowait({"type": "local_game_done", "game": {"id": game_id}})
+        complete = not game_is_active(li, game_id)
+        record_opening = config.opening_history.enabled and complete
+        pgn = li.get_game_pgn(game_id) if config.save_pgn or record_opening else ""
+        save_opening_history_game(game_id,
+                                  pgn,
+                                  complete,
+                                  config,
+                                  play_game_args["user_profile"]["username"])
         pgn_queue.put_nowait({"game": {"id": game_id,
                                        "pgn": pgn,
-                                       "complete": not game_is_active(li, game_id)}})
+                                       "complete": complete}})
+        control_queue.put_nowait({"type": "local_game_done", "game": {"id": game_id}})
 
     pool.apply_async(play_game,
                      kwds=play_game_args,
@@ -913,6 +930,7 @@ def play_game(li: lichess.Lichess,
                             setup_timer = Timer()
                             print_move_number(board)
                             move_attempted = True
+                            excluded_moves = opening_moves_to_avoid(config, game, board)
                             engine.play_move(board,
                                              game,
                                              li,
@@ -922,7 +940,8 @@ def play_game(li: lichess.Lichess,
                                              is_correspondence,
                                              correspondence_move_time,
                                              engine_cfg,
-                                             fake_think_time(config, board, game))
+                                             fake_think_time(config, board, game),
+                                             excluded_moves)
                             time.sleep(to_seconds(delay))
                         elif is_game_over(game):
                             tell_user_game_result(game, board)
@@ -973,7 +992,12 @@ def play_game(li: lichess.Lichess,
                     else:
                         stay_in_game = not isinstance(e, StopIteration) and move_attempted
 
-            pgn_record = try_get_pgn_game_record(li, config, game, board, engine) if config.save_pgn else ""
+            pgn_record = game_record_for_outputs(li, config, game, board, engine)
+            save_opening_history_game(game.id,
+                                      pgn_record,
+                                      is_game_over(game),
+                                      config,
+                                      user_profile["username"])
             if is_game_over(game) and maybe_notify_game:
                 try:
                     maybe_notify_game(game, pgn_record)
@@ -1156,6 +1180,29 @@ def setup_board(game: model.Game) -> chess.Board:
     return board
 
 
+def opening_moves_to_avoid(config: Configuration,
+                           game: model.Game,
+                           board: chess.Board) -> set[chess.Move]:
+    """Find historical moves that would continue a configured result line."""
+    history_config = config.opening_history
+    if not history_config.enabled or not history_config.avoid_results:
+        return set()
+
+    matches = opening_history.moves_to_avoid(history_config.database,
+                                             game.me.name,
+                                             game.opponent.name,
+                                             game.my_color,
+                                             game.variant_name,
+                                             board,
+                                             history_config.avoid_results)
+    if matches:
+        moves = ", ".join(sorted(move.uci() for move in matches))
+        game_ids = ", ".join(sorted({game_id for ids in matches.values() for game_id in ids}))
+        logger.info(f"Avoiding opening move(s) {moves} against {game.opponent.name}; "
+                    f"matched previous game(s) {game_ids} with result(s) {history_config.avoid_results}.")
+    return set(matches)
+
+
 def is_engine_move(game: model.Game, prior_game: model.Game | None, board: chess.Board) -> bool:
     """Check whether it is the engine's turn."""
     return game_changed(game, prior_game) and bot_to_move(game, board)
@@ -1210,10 +1257,10 @@ def final_queue_entries(control_queue: CONTROL_QUEUE_TYPE, correspondence_queue:
     else:
         logger.info(f"--- {game.url()} Game over")
 
-    control_queue.put_nowait({"type": "local_game_done", "game": {"id": game.id}})
     pgn_queue.put_nowait({"game": {"id": game.id,
                                    "pgn": pgn_record,
                                    "complete": is_game_over(game)}})
+    control_queue.put_nowait({"type": "local_game_done", "game": {"id": game.id}})
 
 
 def game_changed(current_game: model.Game, prior_game: model.Game | None) -> bool:
@@ -1284,6 +1331,19 @@ def try_get_pgn_game_record(li: lichess.Lichess, config: Configuration, game: mo
         with contextlib.suppress(Exception):
             return li.get_game_pgn(game.id)
         return ""
+
+
+def game_record_for_outputs(li: lichess.Lichess,
+                            config: Configuration,
+                            game: model.Game,
+                            board: chess.Board,
+                            engine: engine_wrapper.EngineWrapper) -> str:
+    """Get a PGN when file saving or completed-game opening history needs one."""
+    if config.save_pgn:
+        return try_get_pgn_game_record(li, config, game, board, engine)
+    if config.opening_history.enabled and is_game_over(game):
+        return li.get_game_pgn(game.id)
+    return ""
 
 
 def pgn_game_record(li: lichess.Lichess, config: Configuration, game: model.Game, board: chess.Board,
@@ -1571,6 +1631,36 @@ def save_pgn_record(event: EventType, config: Configuration, user_name: str) -> 
 
     if os.path.exists(single_game_path) and game_path != single_game_path:
         os.remove(single_game_path)
+
+
+def save_opening_history_game(game_id: str,
+                              pgn: str,
+                              complete: bool,
+                              config: Configuration,
+                              user_name: str) -> None:
+    """Write one completed game's opening metadata to SQLite before signaling game completion."""
+    history_config = config.opening_history
+    if not history_config.enabled or not complete:
+        return
+
+    if not pgn:
+        logger.warning(f"Could not record opening history for {game_id}: PGN is unavailable.")
+        return
+
+    try:
+        recorded = opening_history.record_game(history_config.database,
+                                               game_id,
+                                               pgn,
+                                               user_name,
+                                               history_config.opening_plies)
+    except Exception:
+        logger.exception(f"Could not record opening history for {game_id}.")
+        return
+
+    if recorded:
+        logger.info(f"Recorded opening history for {game_id} in {history_config.database}.")
+    else:
+        logger.warning(f"Could not record opening history for {game_id}: bot was not found in the PGN.")
 
 
 def intro() -> str:

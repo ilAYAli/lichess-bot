@@ -488,7 +488,7 @@ class Lichess:
     def get_game_pgn(self, game_id: str) -> str:
         """Get the PGN (Portable Game Notation) record of a game."""
         try:
-            return self.api_get_raw("export", game_id)
+            return self.api_get_raw("export", game_id, params={"opening": "true"})
         except Exception:
             return ""
 

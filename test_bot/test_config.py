@@ -61,3 +61,9 @@ def test_stockfish_defaults_allow_play_and_set_greeting() -> None:
     assert raw_config["challenge"]["ignore_stockfish_blocklist"] is True
     assert raw_config["matchmaking"]["ignore_stockfish_blocklist"] is True
     assert raw_config["greeting"]["hello_stockfish"] == "Hi Stockfish!"
+    assert raw_config["opening_history"] == {
+        "enabled": False,
+        "database": "opening_history.sqlite3",
+        "opening_plies": 20,
+        "avoid_results": [],
+    }
