@@ -100,6 +100,41 @@ def test_moves_to_avoid_continuing_a_loss_against_same_opponent(tmp_path: Path) 
                                               ["loss"])
 
 
+def test_moves_to_avoid_draw_against_lower_rated_bot(tmp_path: Path) -> None:
+    """Avoid draws only when the recorded opponent was a lower-rated bot."""
+    database = tmp_path / "opening_history.sqlite3"
+    lower_rated_draw = (PGN.replace('[Result "0-1"]', '[Result "1/2-1/2"]')
+                           .replace('[WhiteElo "2908"]', '[WhiteElo "2800"]')
+                           .replace("6. c4 O-O 0-1", "6. c4 O-O 1/2-1/2"))
+    higher_rated_draw = lower_rated_draw.replace('[WhiteElo "2800"]', '[WhiteElo "2908"]')
+    lower_rated_human_draw = lower_rated_draw.replace('[WhiteTitle "BOT"]\n', "")
+    assert opening_history.record_game(database, "lowerbot", lower_rated_draw, "EnyoV2", opening_ply_limit=8)
+    assert opening_history.record_game(database, "higherbot", higher_rated_draw, "EnyoV2", opening_ply_limit=8)
+    assert opening_history.record_game(database, "lowerhuman", lower_rated_human_draw,
+                                       "EnyoV2", opening_ply_limit=8)
+
+    board = chess.Board()
+    board.push_uci("d2d4")
+    matches = opening_history.moves_to_avoid(database,
+                                             "EnyoV2",
+                                             "KingzBot",
+                                             "black",
+                                             "Standard",
+                                             board,
+                                             [],
+                                             avoid_draws_against_lower_rated_bots=True)
+
+    assert matches == {chess.Move.from_uci("g8f6"): ["lowerbot"]}
+    assert not opening_history.moves_to_avoid(database,
+                                              "EnyoV2",
+                                              "KingzBot",
+                                              "black",
+                                              "Standard",
+                                              board,
+                                              [],
+                                              avoid_draws_against_lower_rated_bots=False)
+
+
 def test_record_game_is_idempotent(tmp_path: Path) -> None:
     """Update an existing game instead of creating a duplicate after a reconnect."""
     database = tmp_path / "opening_history.sqlite3"

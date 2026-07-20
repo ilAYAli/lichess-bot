@@ -155,6 +155,7 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
                        force_empty_values=True)
     set_config_default(CONFIG, "opening_history", key="opening_plies", default=20, force_empty_values=True)
     set_config_default(CONFIG, "opening_history", key="avoid_results", default=[], force_empty_values=True)
+    set_config_default(CONFIG, "opening_history", key="avoid_draws_against_lower_rated_bots", default=True)
     change_value_to_list(CONFIG, "opening_history", key="avoid_results")
     set_config_default(CONFIG, key="max_takebacks_accepted", default=0, force_empty_values=True)
     set_config_default(CONFIG, "engine", key="interpreter", default=None)
@@ -411,6 +412,8 @@ def validate_config(CONFIG: CONFIG_DICT_TYPE) -> None:
     config_assert(all(isinstance(result, str) and result in valid_opening_results
                       for result in opening_history["avoid_results"]),
                   f"opening_history.avoid_results entries must be in {sorted(valid_opening_results)}.")
+    config_assert(isinstance(opening_history["avoid_draws_against_lower_rated_bots"], bool),
+                  "opening_history.avoid_draws_against_lower_rated_bots must be true or false.")
 
     def has_valid_list(name: str) -> bool:
         entries = matchmaking.get(name)

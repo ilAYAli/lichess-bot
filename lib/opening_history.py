@@ -118,14 +118,24 @@ def moves_to_avoid(database: str | Path,
                    bot_color: str,
                    variant: str,
                    board: chess.Board,
-                   avoid_results: Iterable[str]) -> dict[chess.Move, list[str]]:
+                   avoid_results: Iterable[str],
+                   avoid_draws_against_lower_rated_bots: bool = False) -> dict[chess.Move, list[str]]:
     """Return next moves that would continue a matching historical opening line."""
     path = Path(database).expanduser()
     results = tuple(dict.fromkeys(avoid_results))
-    if not path.is_file() or not results:
+    criteria: list[str] = []
+    if results:
+        placeholders = ", ".join("?" for _ in results)
+        criteria.append(f"bot_result IN ({placeholders})")
+    if avoid_draws_against_lower_rated_bots:
+        criteria.append("""(bot_result = 'draw'
+                         AND opponent_is_bot = 1
+                         AND bot_rating IS NOT NULL
+                         AND opponent_rating IS NOT NULL
+                         AND opponent_rating < bot_rating)""")
+    if not path.is_file() or not criteria:
         return {}
 
-    placeholders = ", ".join("?" for _ in results)
     query = f"""
         SELECT game_id, opening_uci
         FROM games
@@ -133,7 +143,7 @@ def moves_to_avoid(database: str | Path,
           AND opponent = ? COLLATE NOCASE
           AND bot_color = ?
           AND variant = ? COLLATE NOCASE
-          AND bot_result IN ({placeholders})
+          AND ({" OR ".join(criteria)})
     """
     parameters = (bot_username, opponent, bot_color, variant, *results)
     try:
