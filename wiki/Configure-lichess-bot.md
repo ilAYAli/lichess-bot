@@ -155,9 +155,9 @@ will precede the `go` command to start thinking with `sd 5`. The other `go_comma
     - `resign_score`: The engine evaluation has to be less than or equal to `resign_score` for the bot to resign.
     - `resign_for_egtb_minus_two`: If true the bot will resign in positions where the online_egtb returns a wdl of -2.
     - `resign_moves`: The evaluation has to be less than or equal to `resign_score` for `resign_moves` amount of moves for the bot to resign.
-    - `offer_draw_enabled`: Whether the bot is allowed to offer/accept draw based on the evaluation.
+    - `offer_draw_enabled`: Whether the bot may offer heuristic or claimable draws. This does not control proven tablebase draws.
     - `offer_draw_score`: The absolute value of the engine evaluation has to be less than or equal to `offer_draw_score` for the bot to offer/accept draw.
-    - `offer_draw_for_egtb_zero`: If true the bot will offer/accept draw in positions where the online_egtb returns a wdl of 0.
+    - `offer_draw_for_egtb_zero`: Independently offer a draw when the engine, online EGTB, or local EGTB reports a proven draw.
     - `offer_draw_moves`: The absolute value of the evaluation has to be less than or equal to `offer_draw_score` for `offer_draw_moves` amount of moves for the bot to offer/accept draw.
     - `offer_draw_pieces`: The bot only offers/accepts draws if the position has less than or equal to `offer_draw_pieces` pieces.
 

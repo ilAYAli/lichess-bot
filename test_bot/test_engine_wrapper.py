@@ -1,9 +1,11 @@
 """Test engine wrapper stat formatting."""
+from unittest.mock import Mock, patch
+
 import chess
 import chess.engine
 
 from lib.config import Configuration
-from lib.engine_wrapper import EngineWrapper, apply_move_exclusions
+from lib.engine_wrapper import EngineWrapper, apply_move_exclusions, get_egtb_move, get_online_move
 
 
 def draw_or_resign_config(**overrides: object) -> Configuration:
@@ -61,12 +63,36 @@ def test_get_stats_uses_engine_source_without_tablebase_status() -> None:
 
 
 def test_offer_draw_or_resign_offers_on_engine_tablebase_draw() -> None:
-    engine = EngineWrapper({}, draw_or_resign_config())
+    engine = EngineWrapper({}, draw_or_resign_config(offer_draw_enabled=False))
     board = chess.Board("8/8/8/8/8/2k5/8/KQ5r w - - 0 1")
     result = chess.engine.PlayResult(chess.Move.from_uci("b1g6"), None, {"string": "tbhit draw dtz 0"})
 
     engine.offer_draw_or_resign(result, board)
 
+    assert result.draw_offered
+
+
+def test_online_tablebase_draw_does_not_require_heuristic_draw_offers() -> None:
+    board = chess.Board()
+    online_moves = Configuration({"online_egtb": {}})
+    draw_or_resign = draw_or_resign_config(offer_draw_enabled=False)
+
+    with patch("lib.engine_wrapper.get_online_egtb_move", return_value=("e2e4", 0, {})):
+        result = get_online_move(Mock(), board, Mock(), online_moves, draw_or_resign)
+
+    assert isinstance(result, chess.engine.PlayResult)
+    assert result.draw_offered
+
+
+def test_local_tablebase_draw_does_not_require_heuristic_draw_offers() -> None:
+    board = chess.Board()
+    tablebases = Configuration({"syzygy": {}, "gaviota": {}})
+    draw_or_resign = draw_or_resign_config(offer_draw_enabled=False)
+
+    with patch("lib.engine_wrapper.get_syzygy", return_value=(chess.Move.from_uci("e2e4"), 0)):
+        result = get_egtb_move(board, Mock(), tablebases, draw_or_resign)
+
+    assert isinstance(result, chess.engine.PlayResult)
     assert result.draw_offered
 
 
@@ -116,3 +142,17 @@ def test_offer_draw_or_resign_offers_when_move_claims_repetition() -> None:
     engine.offer_draw_or_resign(result, board)
 
     assert result.draw_offered
+
+
+def test_disabled_heuristic_draw_offers_do_not_claim_repetition() -> None:
+    engine = EngineWrapper({}, draw_or_resign_config(offer_draw_enabled=False))
+    board = chess.Board()
+    for move in ["g1f3", "g8f6", "f3g1", "f6g8", "g1f3", "g8f6", "f3g1"]:
+        board.push_uci(move)
+    result = chess.engine.PlayResult(chess.Move.from_uci("f6g8"), None, {
+        "wdl": chess.engine.PovWdl(chess.engine.Wdl(wins=90, draws=900, losses=10), chess.BLACK)
+    })
+
+    engine.offer_draw_or_resign(result, board)
+
+    assert not result.draw_offered

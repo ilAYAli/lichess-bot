@@ -324,7 +324,7 @@ class EngineWrapper:
                     logger.info(f"Accepting draw offer: opponent rating diff {rating_diff:+d}, "
                                 f"score {actual(scores[-1])}cp.")
 
-        if can_offer_draw and offer_draw_for_zero and self.is_tablebase_draw(result.info):
+        if offer_draw_for_zero and self.is_tablebase_draw(result.info):
             result.draw_offered = True
             logger.info("Offering draw: engine reported tablebase draw.")
 
@@ -930,9 +930,8 @@ def get_online_move(li: lichess.Lichess, board: chess.Board, game: model.Game, o
     online_egtb_cfg = online_moves_cfg.online_egtb
     best_move, wdl, comment = get_online_egtb_move(li, board, game, online_egtb_cfg)
     if best_move is not None:
-        can_offer_draw = draw_or_resign_cfg.offer_draw_enabled
         offer_draw_for_zero = draw_or_resign_cfg.offer_draw_for_egtb_zero
-        offer_draw = can_offer_draw and offer_draw_for_zero and wdl == 0
+        offer_draw = offer_draw_for_zero and wdl == 0
 
         can_resign = draw_or_resign_cfg.resign_enabled
         resign_on_egtb_loss = draw_or_resign_cfg.resign_for_egtb_minus_two
@@ -1167,9 +1166,8 @@ def get_egtb_move(board: chess.Board, game: model.Game, lichess_bot_tbs: Configu
         best_move, wdl = get_gaviota(board, game, lichess_bot_tbs.gaviota)
         source = "lichess-bot-source:Gaviota EGTB"
     if best_move:
-        can_offer_draw = draw_or_resign_cfg.offer_draw_enabled
         offer_draw_for_zero = draw_or_resign_cfg.offer_draw_for_egtb_zero
-        offer_draw = bool(can_offer_draw and offer_draw_for_zero and wdl == 0)
+        offer_draw = bool(offer_draw_for_zero and wdl == 0)
 
         can_resign = draw_or_resign_cfg.resign_enabled
         resign_on_egtb_loss = draw_or_resign_cfg.resign_for_egtb_minus_two
