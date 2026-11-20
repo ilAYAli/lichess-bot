@@ -182,8 +182,15 @@ def logging_configurer(level: int, filename: str | None, disable_auto_logs: bool
     :param filename: The filename to write the logs to. If it is `None` then the logs aren't written to a file.
     :param disable_auto_logs: Whether to disable automatic logging.
     """
+    class UnicodeSafeFormatter(logging.Formatter):
+        """Escape lone surrogates before sending log text to output handlers."""
+
+        def format(self, record: logging.LogRecord) -> str:
+            formatted = super().format(record)
+            return formatted.encode("utf-8", errors="backslashreplace").decode("utf-8")
+
     console_handler = RichHandler()
-    console_formatter = logging.Formatter("%(message)s")
+    console_formatter = UnicodeSafeFormatter("%(message)s")
     console_handler.setFormatter(console_formatter)
     console_handler.setLevel(level)
     all_handlers: list[logging.Handler] = [console_handler]
@@ -191,7 +198,7 @@ def logging_configurer(level: int, filename: str | None, disable_auto_logs: bool
     if filename:
         file_handler = logging.FileHandler(filename, delay=True, encoding="utf-8")
         FORMAT = "%(asctime)s %(name)s (%(filename)s:%(lineno)d) %(levelname)s %(message)s"
-        file_formatter = logging.Formatter(FORMAT)
+        file_formatter = UnicodeSafeFormatter(FORMAT)
         file_handler.setFormatter(file_formatter)
         file_handler.setLevel(level)
         all_handlers.append(file_handler)
@@ -209,7 +216,7 @@ def logging_configurer(level: int, filename: str | None, disable_auto_logs: bool
         auto_file_handler.setLevel(logging.DEBUG)
 
         FORMAT = "%(asctime)s %(name)s (%(filename)s:%(lineno)d) %(levelname)s %(message)s"
-        file_formatter = logging.Formatter(FORMAT)
+        file_formatter = UnicodeSafeFormatter(FORMAT)
         auto_file_handler.setFormatter(file_formatter)
         all_handlers.append(auto_file_handler)
 
