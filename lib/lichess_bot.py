@@ -902,7 +902,7 @@ def play_game(li: lichess.Lichess,
             max_takebacks_accepted = config.max_takebacks_accepted
 
             keyword_map: defaultdict[str, str] = defaultdict(str, me=game.me.name, opponent=game.opponent.name)
-            keyword_map["build_info"] = get_engine_build_info(engine.name())
+            keyword_map["build_info"] = get_engine_build_info(engine.engine_build_info())
             hello = get_greeting("hello", config.greeting, keyword_map)
             hello_stockfish = get_greeting("hello_stockfish", config.greeting, keyword_map)
             hello_stockfish_spectators = get_greeting("hello_stockfish_spectators", config.greeting, keyword_map)

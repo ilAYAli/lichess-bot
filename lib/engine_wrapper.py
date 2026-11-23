@@ -561,6 +561,11 @@ class EngineWrapper:
         """Get the name of the engine."""
         return self.engine.id["name"]
 
+    def engine_build_info(self) -> str:
+        """Get the engine's full startup identity when its protocol provides one."""
+        protocol = getattr(self.engine, "protocol", None)
+        return getattr(protocol, "startup_info", "") or self.name()
+
     def get_pid(self) -> str:
         """Get the pid of the engine."""
         pid = "?"
@@ -607,6 +612,18 @@ class EngineWrapper:
         self.engine.quit()
 
 
+class StartupInfoUciProtocol(chess.engine.UciProtocol):
+    """Capture the engine's startup identity line, which may include its net."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.startup_info = ""
+
+    def line_received(self, line: str) -> None:
+        if line.startswith("id ") and not line.startswith(("id name ", "id author ")):
+            self.startup_info = line[3:].strip()
+
+
 class UCIEngine(EngineWrapper):
     """The class used to communicate with UCI engines."""
 
@@ -625,8 +642,8 @@ class UCIEngine(EngineWrapper):
         :param popen_args: The cwd of the engine.
         """
         super().__init__(options, draw_or_resign)
-        self.engine = chess.engine.SimpleEngine.popen_uci(commands, timeout=60., debug=debug, setpgrp=True, stderr=stderr,
-                                                          **popen_args)
+        self.engine = chess.engine.SimpleEngine.popen(StartupInfoUciProtocol, commands, timeout=60., debug=debug,
+                                                      setpgrp=True, stderr=stderr, **popen_args)
         self.configure(options, game)
 
 
