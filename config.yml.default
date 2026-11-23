@@ -190,9 +190,20 @@ greeting:
   # Optional substitution keywords (include curly braces):
   #   {opponent} to insert opponent's name
   #   {me} to insert bot's name
+  #   {engine} to insert a detected engine family name in the rebranded-engine greetings
   # Any other words in curly braces will be removed.
   hello: "Hi! I'm {me}. Good luck! Type !help for a list of commands I can respond to." # Message to send to opponent chat at the start of a game
   hello_stockfish: "Hi Stockfish!" # Message to send to both chat rooms when the opponent is a detected Stockfish bot
+  # Optional greeting for known engine families reported by a bot's !name command.
+  hello_rebranded_engine: "Sigh, another rebranded {engine}. (-_-)"
+  hello_rebranded_engine_spectators: "Sigh, another rebranded {engine}. (-_-)"
+  rebranded_engines:
+    Stockfish:
+      - Stockfish
+    Lc0:
+      - Lc0
+      - Leela Chess Zero
+  genuine_engine_accounts: {} # Optional engine-to-account-name mapping to exempt official accounts with non-canonical usernames
   goodbye: "Good game!" # Message to send to opponent chat at the end of a game
   hello_spectators: "Hi! I'm {me}. Type !help for a list of commands I can respond to." # Message to send to spectator chat at the start of a game
   goodbye_spectators: "Thanks for watching!" # Message to send to spectator chat at the end of a game

@@ -903,9 +903,17 @@ def play_game(li: lichess.Lichess,
 
             keyword_map: defaultdict[str, str] = defaultdict(str, me=game.me.name, opponent=game.opponent.name)
             keyword_map["build_info"] = get_engine_build_info(engine.engine_build_info())
+            build_greeting = f"I am {keyword_map['build_info']}"
             hello = get_greeting("hello", config.greeting, keyword_map)
             hello_stockfish = get_greeting("hello_stockfish", config.greeting, keyword_map)
             hello_stockfish_spectators = get_greeting("hello_stockfish_spectators", config.greeting, keyword_map)
+            keyword_map["engine"] = "{engine}"
+            hello_rebranded_engine = get_greeting("hello_rebranded_engine", config.greeting, keyword_map)
+            hello_rebranded_engine_spectators = get_greeting("hello_rebranded_engine_spectators", config.greeting,
+                                                             keyword_map)
+            keyword_map.pop("engine")
+            rebranded_engines = config.greeting.rebranded_engines.config
+            genuine_engine_accounts = config.greeting.genuine_engine_accounts.config
             goodbye = get_greeting("goodbye", config.greeting, keyword_map)
             hello_spectators = get_greeting("hello_spectators", config.greeting, keyword_map)
             goodbye_spectators = get_greeting("goodbye_spectators", config.greeting, keyword_map)
@@ -935,7 +943,9 @@ def play_game(li: lichess.Lichess,
                         if not is_game_over(game) and is_engine_move(game, prior_game, board):
                             disconnect_time = correspondence_disconnect_time
                             say_hello(conversation, hello, hello_spectators, hello_stockfish,
-                                      hello_stockfish_spectators, board)
+                                      hello_stockfish_spectators, board, hello_rebranded_engine,
+                                      hello_rebranded_engine_spectators, rebranded_engines,
+                                      genuine_engine_accounts, build_greeting)
                             setup_timer = Timer()
                             print_move_number(board)
                             move_attempted = True
@@ -1147,10 +1157,17 @@ def say_hello(conversation: Conversation,
               hello_spectators: str,
               hello_stockfish: str,
               hello_stockfish_spectators: str,
-              board: chess.Board) -> None:
+              board: chess.Board,
+              hello_rebranded_engine: str = "",
+              hello_rebranded_engine_spectators: str = "",
+              rebranded_engines: dict[str, list[str]] | None = None,
+              genuine_engine_accounts: dict[str, list[str]] | None = None,
+              build_greeting: str = "") -> None:
     """Send the greetings to the chat rooms."""
     if len(board.move_stack) < 2:
-        conversation.start_greeting(hello, hello_spectators, hello_stockfish, hello_stockfish_spectators)
+        conversation.start_greeting(hello, hello_spectators, hello_stockfish, hello_stockfish_spectators,
+                                    hello_rebranded_engine, hello_rebranded_engine_spectators, rebranded_engines,
+                                    genuine_engine_accounts, build_greeting)
 
 
 def fake_think_time(config: Configuration, board: chess.Board, game: model.Game) -> datetime.timedelta:

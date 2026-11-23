@@ -285,6 +285,11 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
             set_config_default(CONFIG, "greeting", key=greeting + target, default="", force_empty_values=True)
     set_config_default(CONFIG, "greeting", key="hello_stockfish", default="Hi Stockfish!", force_empty_values=True)
     set_config_default(CONFIG, "greeting", key="hello_stockfish_spectators", default="Hi humans!", force_empty_values=True)
+    set_config_default(CONFIG, "greeting", key="hello_rebranded_engine", default="", force_empty_values=True)
+    set_config_default(CONFIG, "greeting", key="hello_rebranded_engine_spectators", default="", force_empty_values=True)
+    set_config_default(CONFIG, "greeting", key="rebranded_engines",
+                       default={"Stockfish": ["Stockfish"], "Lc0": ["Lc0", "Leela Chess Zero"]})
+    set_config_default(CONFIG, "greeting", key="genuine_engine_accounts", default={})
 
 
 def process_block_list(CONFIG: CONFIG_DICT_TYPE) -> None:

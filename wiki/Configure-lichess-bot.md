@@ -220,11 +220,14 @@ will precede the `go` command to start thinking with `sd 5`. The other `go_comma
   - `rating_difference_allow_higher`: If `rating_difference` is set, allow challengers above the bot's rating + `rating_difference`. The default is `false`.
 
 ## Greeting
-- `greeting`: Send messages via chat to the bot's opponent. The string `{me}` will be replaced by the bot's lichess account name. The string `{opponent}` will be replaced by the opponent's lichess account name. Any other word between curly brackets will be removed. If you want to put a curly bracket in the message, use two: `{{` or `}}`.
+- `greeting`: Send messages via chat to the bot's opponent. The strings `{me}` and `{opponent}` are replaced by the bot's and opponent's Lichess usernames. `{build_info}` is replaced by the engine's UCI name, including its network when reported. `{engine}` is replaced with a detected engine family in the rebranded-engine greetings. Other unknown placeholders are removed. If you want to put a curly bracket in the message, use two: `{{` or `}}`.
   - `hello`: Message to send to the opponent when the bot makes its first move.
   - `goodbye`: Message to send to the opponent once the game is over.
   - `hello_spectators`: Message to send to the spectators when the bot makes its first move.
   - `goodbye_spectators`: Message to send to the spectators once the game is over.
+  - `hello_rebranded_engine` and `hello_rebranded_engine_spectators`: Optional messages for engine families detected from a bot's `!name` reply. Use `{engine}` for the canonical engine name.
+  - `rebranded_engines`: A mapping of canonical engine names to the reported names or aliases to recognize. Defaults include Stockfish and Lc0. Add aliases for engines that report a custom name.
+  - `genuine_engine_accounts`: Optional mapping of engine names to Lichess usernames for genuine engine accounts that should receive the normal greeting. Usernames matching the canonical engine name are exempt automatically.
 ```yml
   greeting:
     hello: Hi, {opponent}! I'm {me}. Good luck!

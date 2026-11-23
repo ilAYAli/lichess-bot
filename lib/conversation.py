@@ -50,6 +50,11 @@ class Conversation:
         self.spectator_greeting = ""
         self.stockfish_greeting = ""
         self.stockfish_spectator_greeting = ""
+        self.build_greeting = ""
+        self.rebranded_engine_greeting = ""
+        self.rebranded_engine_spectator_greeting = ""
+        self.rebranded_engines: dict[str, list[str]] = {}
+        self.genuine_engine_accounts: dict[str, list[str]] = {}
         self.greeting_started = False
         self.greeting_pending = False
         self.greeting_sent = False
@@ -66,10 +71,19 @@ class Conversation:
         """
         self.messages.append(line)
         logger.info(f"*** {self.game.url()} [{line.room}] {line.username}: {line.text}")
+        engine_name = self.rebranded_engine_name(line)
+        engine_info = self.opponent_engine_info(line, engine_name)
         stockfish_detected = self.block_stockfish_chat(line)
 
-        if stockfish_detected:
-            self.send_stockfish_greeting()
+        if engine_name and self.rebranded_engine_greeting:
+            self.send_rebranded_engine_greeting(engine_name, engine_info)
+        elif stockfish_detected:
+            if self.is_genuine_engine_account("Stockfish"):
+                self.send_normal_greeting()
+            elif self.rebranded_engine_greeting:
+                self.send_rebranded_engine_greeting("Stockfish")
+            else:
+                self.send_stockfish_greeting()
         elif self.greeting_pending and self.is_opponent_name_reply(line):
             self.send_normal_greeting()
 
@@ -95,8 +109,52 @@ class Conversation:
         expected_prefix = f"{self.game.opponent.name} running ".casefold()
         return line.text.casefold().startswith(expected_prefix)
 
+    def rebranded_engine_name(self, line: ChatLine) -> str:
+        """Return a configured engine family identified by the opponent's !name reply."""
+        if not self.is_opponent_name_reply(line):
+            return ""
+        engine_info = line.text[len(f"{self.game.opponent.name} running "):].strip().casefold()
+        for engine_name, aliases in self.rebranded_engines.items():
+            if self.is_genuine_engine_account(engine_name):
+                continue
+            for alias in aliases:
+                normalized_alias = alias.strip().casefold()
+                if normalized_alias and engine_info.startswith(normalized_alias):
+                    suffix = engine_info[len(normalized_alias):]
+                    if suffix and suffix[0].isalnum():
+                        continue
+                    return engine_name
+        return ""
+
+    def opponent_engine_info(self, line: ChatLine, engine_name: str) -> str:
+        """Return versioned engine info from the opponent's !name reply."""
+        if not self.is_opponent_name_reply(line):
+            return ""
+        engine_info = line.text[len(f"{self.game.opponent.name} running "):].partition(" (")[0].strip()
+        for alias in self.rebranded_engines.get(engine_name, []):
+            if not engine_info.casefold().startswith(alias.casefold()):
+                continue
+            suffix = engine_info[len(alias):]
+            if suffix and not suffix[0].isalnum() and suffix.strip(" ._-"):
+                return f"running {engine_info}"
+        return ""
+
+    def is_genuine_engine_account(self, engine_name: str) -> bool:
+        """Avoid the rebranded greeting for canonical or explicitly listed engine accounts."""
+        def normalize(value: str) -> str:
+            return "".join(character for character in value.casefold() if character.isalnum())
+
+        if normalize(self.game.opponent.name) == normalize(engine_name):
+            return True
+        accounts = self.genuine_engine_accounts.get(engine_name, [])
+        return any(self.game.opponent.name.casefold() == account.casefold() for account in accounts)
+
     def start_greeting(self, player: str, spectator: str, stockfish: str,
-                       stockfish_spectator: str | None = None) -> None:
+                       stockfish_spectator: str | None = None,
+                       rebranded_engine: str = "", rebranded_engine_spectator: str = "",
+                       rebranded_engines: dict[str, list[str]] | None = None,
+                       genuine_engine_accounts: dict[str, list[str]] | None = None,
+                       build_greeting: str = "") -> None:
         """Start greeting, querying an unknown bot's engine before choosing the text."""
         if self.greeting_started:
             return
@@ -106,13 +164,24 @@ class Conversation:
         self.spectator_greeting = spectator
         self.stockfish_greeting = stockfish
         self.stockfish_spectator_greeting = stockfish_spectator or stockfish
+        self.build_greeting = build_greeting
+        self.rebranded_engine_greeting = rebranded_engine
+        self.rebranded_engine_spectator_greeting = rebranded_engine_spectator or rebranded_engine
+        self.rebranded_engines = (rebranded_engines if rebranded_engines is not None else
+                                  {"Stockfish": ["Stockfish"], "Lc0": ["Lc0", "Leela Chess Zero"]})
+        self.genuine_engine_accounts = genuine_engine_accounts or {}
 
         if not self.game.opponent.is_bot:
             self.send_normal_greeting()
             return
 
         if self.stockfish_detected or matchmaking.stockfish_block_list_contains(self.game.opponent.name):
-            self.send_stockfish_greeting()
+            if self.is_genuine_engine_account("Stockfish"):
+                self.send_normal_greeting()
+            elif self.rebranded_engine_greeting:
+                self.send_rebranded_engine_greeting("Stockfish")
+            else:
+                self.send_stockfish_greeting()
         else:
             self.greeting_pending = True
         self.ask_opponent_name()
@@ -141,6 +210,21 @@ class Conversation:
         self.send_message("spectator", self.stockfish_spectator_greeting)
         self.greeting_sent = True
         self.stockfish_greeting_sent = True
+
+    def send_rebranded_engine_greeting(self, engine_name: str, engine_info: str = "") -> None:
+        """Send configured engine-family greetings once."""
+        if not self.greeting_started or self.greeting_sent or not self.rebranded_engine_greeting:
+            return
+        self.greeting_pending = False
+        engine_info_suffix = f" ({engine_info})" if engine_info else ""
+        if self.build_greeting:
+            self.send_message("player", self.build_greeting)
+        self.send_message("player", self.rebranded_engine_greeting.format(engine=engine_name))
+        if self.build_greeting:
+            self.send_message("spectator", self.build_greeting)
+        self.send_message("spectator", self.rebranded_engine_spectator_greeting.format(
+            engine=engine_name, engine_info=engine_info_suffix))
+        self.greeting_sent = True
 
     def ask_opponent_name(self) -> None:
         """Ask bot opponents to identify their engine."""
