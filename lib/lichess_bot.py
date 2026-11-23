@@ -902,6 +902,7 @@ def play_game(li: lichess.Lichess,
             max_takebacks_accepted = config.max_takebacks_accepted
 
             keyword_map: defaultdict[str, str] = defaultdict(str, me=game.me.name, opponent=game.opponent.name)
+            keyword_map["build_info"] = get_engine_build_info(engine.name())
             hello = get_greeting("hello", config.greeting, keyword_map)
             hello_stockfish = get_greeting("hello_stockfish", config.greeting, keyword_map)
             hello_stockfish_spectators = get_greeting("hello_stockfish_spectators", config.greeting, keyword_map)
@@ -1126,6 +1127,19 @@ def get_greeting(greeting: str, greeting_cfg: Configuration, keyword_map: defaul
     """Get the greeting to send to the chat."""
     greeting_text: str = greeting_cfg.lookup(greeting)
     return greeting_text.format_map(keyword_map)
+
+
+def get_engine_build_info(engine_name: str) -> str:
+    """Format the engine's UCI name for greetings, omitting its build date."""
+    if " built " not in engine_name:
+        return engine_name
+    identity, details = engine_name.split(" built ", 1)
+    net_marker = " using net: "
+    if net_marker in details:
+        net = details.split(net_marker, 1)[1].strip()
+        if net:
+            return f"{identity} using net: {net}"
+    return identity
 
 
 def say_hello(conversation: Conversation,
