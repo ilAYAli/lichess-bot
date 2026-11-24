@@ -46,22 +46,3 @@ def test_validate_config__empty_opponent_rating_difference() -> None:
     config.validate_config(CONFIG)
 
 
-def test_opening_history_defaults() -> None:
-    """Opening history is disabled unless configured."""
-    raw_config = {
-        "engine": {},
-        "challenge": {},
-        "correspondence": {},
-        "matchmaking": {},
-        "greeting": {},
-    }
-
-    config.insert_default_values(raw_config)
-
-    assert raw_config["opening_history"] == {
-        "enabled": False,
-        "database": "opening_history.sqlite3",
-        "opening_plies": 20,
-        "avoid_loss_openings": True,
-        "avoid_draw_openings_vs_lower_rated_bots": True,
-    }

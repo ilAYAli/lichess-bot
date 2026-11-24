@@ -150,12 +150,6 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     set_config_default(CONFIG, key="pgn_directory", default=None)
     set_config_default(CONFIG, key="save_pgn", default=True)
     set_config_default(CONFIG, key="pgn_file_grouping", default="game", force_empty_values=True)
-    set_config_default(CONFIG, "opening_history", key="enabled", default=False)
-    set_config_default(CONFIG, "opening_history", key="database", default="opening_history.sqlite3",
-                       force_empty_values=True)
-    set_config_default(CONFIG, "opening_history", key="opening_plies", default=20, force_empty_values=True)
-    set_config_default(CONFIG, "opening_history", key="avoid_loss_openings", default=True)
-    set_config_default(CONFIG, "opening_history", key="avoid_draw_openings_vs_lower_rated_bots", default=True)
     set_config_default(CONFIG, key="max_takebacks_accepted", default=0, force_empty_values=True)
     set_config_default(CONFIG, "engine", key="interpreter", default=None)
     set_config_default(CONFIG, "engine", key="interpreter_options", default=[], force_empty_values=True)
@@ -399,18 +393,6 @@ def validate_config(CONFIG: CONFIG_DICT_TYPE) -> None:
     config_assert(config_pgn_choice in valid_pgn_grouping_options,
                   f"The `pgn_file_grouping` choice of `{config_pgn_choice}` is not valid. "
                   f"Please choose from {valid_pgn_grouping_options}.")
-
-    opening_history = CONFIG["opening_history"]
-    config_assert(isinstance(opening_history["enabled"], bool),
-                  "opening_history.enabled must be true or false.")
-    config_assert(isinstance(opening_history["database"], str) and bool(opening_history["database"].strip()),
-                  "opening_history.database must be a non-empty path string.")
-    config_assert(type(opening_history["opening_plies"]) is int and opening_history["opening_plies"] > 0,
-                  "opening_history.opening_plies must be a positive integer.")
-    config_assert(isinstance(opening_history["avoid_loss_openings"], bool),
-                  "opening_history.avoid_loss_openings must be true or false.")
-    config_assert(isinstance(opening_history["avoid_draw_openings_vs_lower_rated_bots"], bool),
-                  "opening_history.avoid_draw_openings_vs_lower_rated_bots must be true or false.")
 
     def has_valid_list(name: str) -> bool:
         entries = matchmaking.get(name)

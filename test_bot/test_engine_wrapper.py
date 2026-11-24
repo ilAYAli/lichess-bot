@@ -5,7 +5,7 @@ import chess
 import chess.engine
 
 from lib.config import Configuration
-from lib.engine_wrapper import EngineWrapper, apply_move_exclusions, get_egtb_move, get_online_move
+from lib.engine_wrapper import EngineWrapper, get_egtb_move, get_online_move
 
 
 def draw_or_resign_config(**overrides: object) -> Configuration:
@@ -24,20 +24,6 @@ def draw_or_resign_config(**overrides: object) -> Configuration:
         "draw_score_lower_rated_min_diff": 200,
     }
     return Configuration(defaults | overrides)
-
-
-def test_apply_move_exclusions_restricts_engine_root_moves() -> None:
-    """A blocked book or engine move is replaced by the remaining legal root moves."""
-    board = chess.Board()
-    board.push_uci("d2d4")
-    blocked_move = chess.Move.from_uci("g8f6")
-    result = chess.engine.PlayResult(blocked_move, None)
-
-    restricted = apply_move_exclusions(result, board, {blocked_move})
-
-    assert isinstance(restricted, list)
-    assert blocked_move not in restricted
-    assert chess.Move.from_uci("d7d5") in restricted
 
 
 def test_get_stats_formats_tablebase_status_with_dtz() -> None:

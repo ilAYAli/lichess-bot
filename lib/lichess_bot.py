@@ -3,7 +3,7 @@ import argparse
 import chess
 import chess.pgn
 from chess.variant import find_variant
-from lib import engine_wrapper, model, lichess, matchmaking, opening_history
+from lib import engine_wrapper, model, lichess, matchmaking
 import json
 import logging
 import logging.handlers
@@ -726,13 +726,7 @@ def start_game_thread(active_games: dict[str, str], game_id: str, opponent_name:
         li = play_game_args["li"]
         config = play_game_args["config"]
         complete = not game_is_active(li, game_id)
-        record_opening = config.opening_history.enabled and complete
-        pgn = li.get_game_pgn(game_id) if config.save_pgn or record_opening else ""
-        save_opening_history_game(game_id,
-                                  pgn,
-                                  complete,
-                                  config,
-                                  play_game_args["user_profile"]["username"])
+        pgn = li.get_game_pgn(game_id) if config.save_pgn else ""
         pgn_queue.put_nowait({"game": {"id": game_id,
                                        "pgn": pgn,
                                        "complete": complete}})
@@ -869,8 +863,6 @@ def play_game(li: lichess.Lichess,
             conversation = Conversation(game, engine, li, __version__, challenge_queue)
 
             logger.warning(f"+++ {game}")
-            log_opening_history(config, game)
-
             is_correspondence = game.speed == "correspondence"
             correspondence_cfg = config.correspondence
             correspondence_move_time = seconds(correspondence_cfg.move_time)
@@ -927,7 +919,6 @@ def play_game(li: lichess.Lichess,
                             setup_timer = Timer()
                             print_move_number(board)
                             move_attempted = True
-                            excluded_moves = opening_moves_to_avoid(config, game, board)
                             engine.play_move(board,
                                              game,
                                              li,
@@ -937,8 +928,7 @@ def play_game(li: lichess.Lichess,
                                              is_correspondence,
                                              correspondence_move_time,
                                              engine_cfg,
-                                             fake_think_time(config, board, game),
-                                             excluded_moves)
+                                             fake_think_time(config, board, game))
                             time.sleep(to_seconds(delay))
                         elif is_game_over(game):
                             tell_user_game_result(game, board)
@@ -992,11 +982,6 @@ def play_game(li: lichess.Lichess,
                     conversation.check_bio_fallback()
 
             pgn_record = game_record_for_outputs(li, config, game, board, engine)
-            save_opening_history_game(game.id,
-                                      pgn_record,
-                                      is_game_over(game),
-                                      config,
-                                      user_profile["username"])
             if is_game_over(game) and maybe_notify_game:
                 try:
                     maybe_notify_game(game, pgn_record)
@@ -1195,70 +1180,6 @@ def setup_board(game: model.Game) -> chess.Board:
     return board
 
 
-def opening_moves_to_avoid(config: Configuration,
-                           game: model.Game,
-                           board: chess.Board) -> set[chess.Move]:
-    """Find historical moves that would continue a configured result line."""
-    history_config = config.opening_history
-    avoid_loss_openings = history_config.avoid_loss_openings
-    avoid_lower_rated_draws = history_config.avoid_draw_openings_vs_lower_rated_bots
-    if not history_config.enabled or (not avoid_loss_openings and not avoid_lower_rated_draws):
-        return set()
-
-    matches = opening_history.moves_to_avoid(history_config.database,
-                                             game.me.name,
-                                             game.opponent.name,
-                                             game.my_color,
-                                             game.variant_name,
-                                             board,
-                                             avoid_loss_openings,
-                                             avoid_lower_rated_draws)
-    if matches:
-        moves = ", ".join(sorted(move.uci() for move in matches))
-        game_ids = ", ".join(sorted({game_id for ids in matches.values() for game_id in ids}))
-        criteria = ["loss"] if avoid_loss_openings else []
-        if avoid_lower_rated_draws:
-            criteria.append("draw against a lower-rated bot")
-        logger.warning(f"Avoiding opening move(s) {moves} against {game.opponent.name}; "
-                       f"matched previous game(s) {game_ids} with criteria {', '.join(criteria)}.")
-    return set(matches)
-
-
-def log_opening_history(config: Configuration, game: model.Game) -> None:
-    """Log prior openings and outcomes when meeting an opponent again."""
-    history_config = config.opening_history
-    if not history_config.enabled:
-        return
-
-    records = opening_history.games_against_opponent(history_config.database,
-                                                     game.me.name,
-                                                     game.opponent.name,
-                                                     game.variant_name)
-    if not records:
-        logger.warning(f"No recorded opening history against {game.opponent.name} in {game.variant_name}.")
-        return
-
-    game_label = "game" if len(records) == 1 else "games"
-    lines = [f"Opening history against {game.opponent.name} "
-             f"({len(records)} prior {game.variant_name} {game_label}, newest first):"]
-    for record in records:
-        opening = " ".join(part for part in (record.eco, record.opening) if part)
-        if record.variation:
-            opening = f"{opening} ({record.variation})" if opening else record.variation
-        if not opening:
-            opening = record.opening_san or "unknown opening"
-
-        ratings = ""
-        if record.bot_rating is not None and record.opponent_rating is not None:
-            ratings = (f"; ratings {game.me.name} {record.bot_rating}, "
-                       f"{game.opponent.name} {record.opponent_rating}")
-        reference = record.site or record.game_id
-        lines.append(f"  {record.bot_result.upper()} as {record.bot_color.title()}: "
-                     f"{opening}{ratings}; {reference}")
-
-    logger.warning("\n".join(lines))
-
-
 def is_engine_move(game: model.Game, prior_game: model.Game | None, board: chess.Board) -> bool:
     """Check whether it is the engine's turn."""
     return game_changed(game, prior_game) and bot_to_move(game, board)
@@ -1394,11 +1315,9 @@ def game_record_for_outputs(li: lichess.Lichess,
                             game: model.Game,
                             board: chess.Board,
                             engine: engine_wrapper.EngineWrapper) -> str:
-    """Get a PGN when file saving or completed-game opening history needs one."""
+    """Get a PGN when game-file saving is enabled."""
     if config.save_pgn:
         return try_get_pgn_game_record(li, config, game, board, engine)
-    if config.opening_history.enabled and is_game_over(game):
-        return li.get_game_pgn(game.id)
     return ""
 
 
@@ -1687,36 +1606,6 @@ def save_pgn_record(event: EventType, config: Configuration, user_name: str) -> 
 
     if os.path.exists(single_game_path) and game_path != single_game_path:
         os.remove(single_game_path)
-
-
-def save_opening_history_game(game_id: str,
-                              pgn: str,
-                              complete: bool,
-                              config: Configuration,
-                              user_name: str) -> None:
-    """Write one completed game's opening metadata to SQLite before signaling game completion."""
-    history_config = config.opening_history
-    if not history_config.enabled or not complete:
-        return
-
-    if not pgn:
-        logger.warning(f"Could not record opening history for {game_id}: PGN is unavailable.")
-        return
-
-    try:
-        recorded = opening_history.record_game(history_config.database,
-                                               game_id,
-                                               pgn,
-                                               user_name,
-                                               history_config.opening_plies)
-    except Exception:
-        logger.exception(f"Could not record opening history for {game_id}.")
-        return
-
-    if recorded:
-        logger.info(f"Recorded opening history for {game_id} in {history_config.database}.")
-    else:
-        logger.warning(f"Could not record opening history for {game_id}: bot was not found in the PGN.")
 
 
 def intro() -> str:

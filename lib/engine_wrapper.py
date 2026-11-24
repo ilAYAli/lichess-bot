@@ -85,31 +85,6 @@ PONDERPV_CHARACTERS = 6  # The length of ", Pv: ".
 FIRST_MOVE_SEARCH_TIME = seconds(1)
 
 
-def apply_move_exclusions(best_move: MOVE,
-                          board: chess.Board,
-                          excluded_moves: set[chess.Move]) -> MOVE:
-    """Prevent book, online, and engine choices from continuing a blocked opening line."""
-    if not excluded_moves:
-        return best_move
-
-    legal_moves = list(board.legal_moves)
-    blocked_moves = excluded_moves.intersection(legal_moves)
-    if not blocked_moves:
-        return best_move
-
-    allowed_moves = [move for move in legal_moves if move not in blocked_moves]
-    if not allowed_moves:
-        logger.warning("Cannot avoid opening history because every legal move is blocked.")
-        return best_move
-
-    if isinstance(best_move, list):
-        allowed_suggestions = [move for move in best_move if move not in blocked_moves]
-        return allowed_suggestions or allowed_moves
-    if best_move.move is None or best_move.move in blocked_moves:
-        return allowed_moves
-    return best_move
-
-
 class EngineWrapper:
     """A wrapper used by all engines (UCI, XBoard, Homemade)."""
 
@@ -167,8 +142,7 @@ class EngineWrapper:
                   is_correspondence: bool,
                   correspondence_move_time: datetime.timedelta,
                   engine_cfg: Configuration,
-                  min_time: datetime.timedelta,
-                  excluded_moves: set[chess.Move] | None = None) -> None:
+                  min_time: datetime.timedelta) -> None:
         """
         Play a move.
 
@@ -182,7 +156,6 @@ class EngineWrapper:
         :param correspondence_move_time: The time the engine will think if `is_correspondence` is true.
         :param engine_cfg: Options for external moves (e.g. from an opening book), and for engine resignation and draw offers.
         :param min_time: Minimum time to spend, in seconds.
-        :param excluded_moves: Legal opening moves that must not be replayed in this game.
         :return: The move to play.
         """
         polyglot_cfg = engine_cfg.polyglot
@@ -206,8 +179,6 @@ class EngineWrapper:
                                         game,
                                         online_moves_cfg,
                                         draw_or_resign_cfg)
-
-        best_move = apply_move_exclusions(best_move, board, excluded_moves or set())
 
         if isinstance(best_move, list) or best_move.move is None:
             draw_offered = check_for_draw_offer(game)
