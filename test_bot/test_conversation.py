@@ -1,6 +1,6 @@
 """Test chat reactions and greeting selection."""
 from types import SimpleNamespace
-from unittest.mock import Mock, call, patch
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -9,8 +9,8 @@ from lib.conversation import ChatLine, Conversation
 
 PLAYER_GREETING = "Greetings, OtherBot! I'm Enyo, created and trained by Petter Wahlman."
 SPECTATOR_GREETING = "Greetings, Earthling! I'm Enyo, created and trained by Petter Wahlman."
-STOCKFISH_PLAYER_GREETING = "Hi, Stockfish! I'm Enyo, created and trained by Petter Wahlman."
-STOCKFISH_SPECTATOR_GREETING = "Greetings, human! I'm Enyo. It seems I'm playing against STOCKFISH this time."
+STOCKFISH_GREETING = "yet-an-other rebranded Stockfish!{engine_info}"
+STOCKFISH_SPECTATOR_GREETING = "yet-an-other rebranded Stockfish!{engine_info}"
 
 
 def make_conversation(*, is_bot: bool = True) -> Conversation:
@@ -25,84 +25,64 @@ def make_conversation(*, is_bot: bool = True) -> Conversation:
 
 
 @pytest.mark.parametrize("room", ["player", "spectator"])
-def test_live_stockfish_name_reply_sends_stockfish_greeting(room: str) -> None:
-    """Greet a first-time Stockfish bot immediately after its !name reply."""
+def test_stockfish_greeting_requires_opponent_name_reply(room: str) -> None:
+    """Only identify an engine when the opponent's !name reply reports it."""
     conversation = make_conversation()
-    with patch("lib.conversation.matchmaking.stockfish_block_list_contains", return_value=False):
-        conversation.start_greeting(PLAYER_GREETING,
-                                    SPECTATOR_GREETING,
-                                    STOCKFISH_PLAYER_GREETING,
-                                    STOCKFISH_SPECTATOR_GREETING)
+    conversation.start_greeting(PLAYER_GREETING,
+                                SPECTATOR_GREETING,
+                                STOCKFISH_GREETING,
+                                STOCKFISH_SPECTATOR_GREETING,
+                                "I am Enyo")
 
-    conversation.li.chat.assert_called_once_with("game-id", "player", "!name")
+    assert conversation.li.chat.call_args_list == [
+        call("game-id", "player", "!name"),
+        call("game-id", "player", "I am Enyo"),
+        call("game-id", "spectator", "I am Enyo"),
+    ]
     reply = ChatLine({
         "room": room,
         "username": "OtherBot",
         "text": "OtherBot running Stockfish 18 (lichess-bot v2026.6.28.2)",
     })
-    with patch("lib.conversation.matchmaking.block_stockfish_text", return_value=True):
-        conversation.react(reply)
+    conversation.react(reply)
+    assert conversation.opponent_engine_type == "Stockfish 18"
 
     assert conversation.li.chat.call_args_list == [
         call("game-id", "player", "!name"),
-        call("game-id", "player", STOCKFISH_PLAYER_GREETING),
-        call("game-id", "spectator", STOCKFISH_SPECTATOR_GREETING),
+        call("game-id", "player", "I am Enyo"),
+        call("game-id", "spectator", "I am Enyo"),
+        call("game-id", "player", "yet-an-other rebranded Stockfish! (running Stockfish 18)"),
+        call("game-id", "spectator", "yet-an-other rebranded Stockfish! (running Stockfish 18)"),
     ]
 
 
-def test_non_stockfish_name_reply_sends_normal_greetings() -> None:
-    """Keep normal greetings when an unknown bot identifies another engine."""
+def test_non_stockfish_name_reply_uses_configured_follow_up() -> None:
+    """Use the reported engine name and version in the optional follow-up."""
     conversation = make_conversation()
-    with patch("lib.conversation.matchmaking.stockfish_block_list_contains", return_value=False):
-        conversation.start_greeting(PLAYER_GREETING,
-                                    SPECTATOR_GREETING,
-                                    STOCKFISH_PLAYER_GREETING,
-                                    STOCKFISH_SPECTATOR_GREETING)
+    conversation.start_greeting(PLAYER_GREETING, SPECTATOR_GREETING,
+                                other_engine="Finally, not Stockfish! My opponent reports running {engine_info}.")
 
-    reply = ChatLine({"room": "player", "username": "OtherBot", "text": "OtherBot running Enyo 1.0"})
-    with patch("lib.conversation.matchmaking.block_stockfish_text", return_value=False):
-        conversation.react(reply)
+    reply = ChatLine({"room": "player", "username": "OtherBot",
+                      "text": "OtherBot running Ursus 1.1.0-dev-3db301f avx2 (lichess-bot v2026.6.28.2)"})
+    conversation.react(reply)
+    conversation.react(reply)
+    assert conversation.opponent_engine_type == "Ursus 1.1.0-dev-3db301f avx2"
 
+    expected = "Finally, not Stockfish! My opponent reports running Ursus 1.1.0-dev-3db301f."
     assert conversation.li.chat.call_args_list == [
         call("game-id", "player", "!name"),
-        call("game-id", "player", PLAYER_GREETING),
-        call("game-id", "spectator", SPECTATOR_GREETING),
+        call("game-id", "player", expected),
+        call("game-id", "spectator", expected),
     ]
 
 
-def test_undetected_bot_falls_back_to_normal_greetings() -> None:
-    """Do not call an unresponsive, undetected bot Stockfish."""
+def test_unresponsive_bot_gets_no_engine_specific_follow_up() -> None:
+    """Do not send an engine-specific follow-up when a bot does not answer !name."""
     conversation = make_conversation()
-    with patch("lib.conversation.matchmaking.stockfish_block_list_contains", return_value=False):
-        conversation.start_greeting(PLAYER_GREETING,
-                                    SPECTATOR_GREETING,
-                                    STOCKFISH_PLAYER_GREETING,
-                                    STOCKFISH_SPECTATOR_GREETING)
-
-    conversation.finish_pending_greeting()
+    conversation.start_greeting(PLAYER_GREETING, SPECTATOR_GREETING)
 
     assert conversation.li.chat.call_args_list == [
         call("game-id", "player", "!name"),
-        call("game-id", "player", PLAYER_GREETING),
-        call("game-id", "spectator", SPECTATOR_GREETING),
     ]
 
 
-def test_known_stockfish_bot_gets_stockfish_greeting_once() -> None:
-    """Use the Stockfish greeting immediately for a previously detected bot."""
-    conversation = make_conversation()
-    with patch("lib.conversation.matchmaking.stockfish_block_list_contains", return_value=True):
-        conversation.start_greeting(PLAYER_GREETING,
-                                    SPECTATOR_GREETING,
-                                    STOCKFISH_PLAYER_GREETING,
-                                    STOCKFISH_SPECTATOR_GREETING)
-
-    reply = ChatLine({"room": "player", "username": "OtherBot", "text": "OtherBot running Stockfish 18"})
-    with patch("lib.conversation.matchmaking.block_stockfish_text", return_value=True):
-        conversation.react(reply)
-
-    assert conversation.li.chat.call_args_list == [
-        call("game-id", "player", STOCKFISH_PLAYER_GREETING),
-        call("game-id", "spectator", STOCKFISH_SPECTATOR_GREETING),
-        call("game-id", "player", "!name"),
-    ]

@@ -46,8 +46,8 @@ def test_validate_config__empty_opponent_rating_difference() -> None:
     config.validate_config(CONFIG)
 
 
-def test_stockfish_defaults_allow_play_and_set_greeting() -> None:
-    """Stockfish bots are played and greeted unless blocking is explicitly enabled."""
+def test_opening_history_defaults() -> None:
+    """Opening history is disabled unless configured."""
     raw_config = {
         "engine": {},
         "challenge": {},
@@ -58,9 +58,6 @@ def test_stockfish_defaults_allow_play_and_set_greeting() -> None:
 
     config.insert_default_values(raw_config)
 
-    assert raw_config["challenge"]["ignore_stockfish_blocklist"] is True
-    assert raw_config["matchmaking"]["ignore_stockfish_blocklist"] is True
-    assert raw_config["greeting"]["hello_stockfish"] == "Hi Stockfish!"
     assert raw_config["opening_history"] == {
         "enabled": False,
         "database": "opening_history.sqlite3",

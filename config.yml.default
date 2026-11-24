@@ -182,7 +182,6 @@ challenge:                         # Incoming challenges.
 # rating_difference: 300          # Maximum rating difference between the bot and the challenger. Overrides min_rating and max_rating if set.
 # rating_difference_allow_higher: false  # If rating_difference is set, allow challengers above the bot's rating + rating_difference.
 # ignore_casual_human_rating: false # Ignore rating limits for casual games from human challengers.
-# ignore_stockfish_blocklist: true  # Play detected Stockfish bots. Set false to reject their incoming challenges.
   bullet_requires_increment: false # Require that bullet game challenges from bots have a non-zero increment
   max_simultaneous_games_per_user: 5  # Maximum number of simultaneous games with the same user
 
@@ -190,20 +189,14 @@ greeting:
   # Optional substitution keywords (include curly braces):
   #   {opponent} to insert opponent's name
   #   {me} to insert bot's name
-  #   {engine} to insert a detected engine family name in the rebranded-engine greetings
+  #   {engine_info} to include the reported Stockfish version/build, when available
   # Any other words in curly braces will be removed.
   hello: "Hi! I'm {me}. Good luck! Type !help for a list of commands I can respond to." # Message to send to opponent chat at the start of a game
-  hello_stockfish: "Hi Stockfish!" # Message to send to both chat rooms when the opponent is a detected Stockfish bot
-  # Optional greeting for known engine families reported by a bot's !name command.
-  hello_rebranded_engine: "Sigh, another rebranded {engine}. (-_-)"
-  hello_rebranded_engine_spectators: "Sigh, another rebranded {engine}. (-_-)"
-  rebranded_engines:
-    Stockfish:
-      - Stockfish
-    Lc0:
-      - Lc0
-      - Leela Chess Zero
-  genuine_engine_accounts: {} # Optional engine-to-account-name mapping to exempt official accounts with non-canonical usernames
+  # Optional follow-up when a bot's !name reply identifies Stockfish.
+  hello_stockfish: "Sigh, another rebranded Stockfish. (-_-)"
+  hello_stockfish_spectators: "Sigh, another rebranded Stockfish. (-_-)"
+  hello_other_engine: "" # Optional follow-up in both rooms for other engines reported via !name
+  hello_stockfish_bio: "" # Optional follow-up in both rooms for an explicit Stockfish version in the bot's bio
   goodbye: "Good game!" # Message to send to opponent chat at the end of a game
   hello_spectators: "Hi! I'm {me}. Type !help for a list of commands I can respond to." # Message to send to spectator chat at the start of a game
   goodbye_spectators: "Thanks for watching!" # Message to send to spectator chat at the end of a game
@@ -241,7 +234,6 @@ matchmaking:
   rating_preference: "none"        # One of "none", "high", "low".
   challenge_mode: "random"         # Set it to the mode in which challenges are sent. Possible options are 'casual', 'rated' and 'random'.
   challenge_filter: none           # If a bot declines a challenge, do not issue a similar challenge to that bot. Possible options are 'none', 'coarse', and 'fine'.
-# ignore_stockfish_blocklist: true  # Play detected Stockfish bots. Set false to exclude them from outgoing matchmaking.
 # block_list:                      # The list of bots that will not be challenged
 #   - user1
 #   - user2

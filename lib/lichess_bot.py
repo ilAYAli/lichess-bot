@@ -795,22 +795,6 @@ def handle_challenge(event: EventType, li: lichess.Lichess, challenge_queue: MUL
     if chlng.from_self:
         return
 
-    use_stockfish_blocklist = not challenge_config.ignore_stockfish_blocklist
-    if use_stockfish_blocklist and chlng.challenger.is_bot and matchmaking.stockfish_block_list_contains(chlng.challenger.name):
-        logger.warning(f"Decline {chlng}: {chlng.challenger.name} is in the local Stockfish blocklist.")
-        li.decline_challenge(chlng.id, reason="generic")
-        return
-
-    stockfish_profile_detected = False
-    if chlng.challenger.is_bot:
-        with contextlib.suppress(Exception):
-            stockfish_profile_detected = matchmaking.block_stockfish_profile(chlng.challenger.name,
-                                                                             li.get_public_data(chlng.challenger.name))
-    if use_stockfish_blocklist and stockfish_profile_detected:
-        logger.warning(f"Decline {chlng}: public profile mentions Stockfish.")
-        li.decline_challenge(chlng.id, reason="generic")
-        return
-
     active_games = li.get_ongoing_games() or []
     opponent_engagements = Counter(game["opponent"]["username"] for game in active_games)
     opponent_engagements.update(challenge.challenger.name for challenge in challenge_queue)
@@ -905,27 +889,27 @@ def play_game(li: lichess.Lichess,
             keyword_map["build_info"] = get_engine_build_info(engine.engine_build_info())
             build_greeting = f"I am {keyword_map['build_info']}"
             hello = get_greeting("hello", config.greeting, keyword_map)
+            keyword_map["engine_info"] = "{engine_info}"
             hello_stockfish = get_greeting("hello_stockfish", config.greeting, keyword_map)
             hello_stockfish_spectators = get_greeting("hello_stockfish_spectators", config.greeting, keyword_map)
-            keyword_map["engine"] = "{engine}"
-            hello_rebranded_engine = get_greeting("hello_rebranded_engine", config.greeting, keyword_map)
-            hello_rebranded_engine_spectators = get_greeting("hello_rebranded_engine_spectators", config.greeting,
-                                                             keyword_map)
-            keyword_map.pop("engine")
-            rebranded_engines = config.greeting.rebranded_engines.config
-            genuine_engine_accounts = config.greeting.genuine_engine_accounts.config
+            hello_other_engine = get_greeting("hello_other_engine", config.greeting, keyword_map)
+            hello_stockfish_bio = get_greeting("hello_stockfish_bio", config.greeting, keyword_map)
+            keyword_map.pop("engine_info")
             goodbye = get_greeting("goodbye", config.greeting, keyword_map)
             hello_spectators = get_greeting("hello_spectators", config.greeting, keyword_map)
             goodbye_spectators = get_greeting("goodbye_spectators", config.greeting, keyword_map)
 
             disconnect_time = correspondence_disconnect_time if not game.state.get("moves") else seconds(0)
             prior_game = None
-            board = chess.Board()
+            board = setup_board(game)
             game_stream: Iterator[bytes] = itertools.chain([json.dumps(game.state).encode("utf-8")], lines)
             quit_after_all_games_finish = config.quit_after_all_games_finish
             stay_in_game = True
             reopen_delay = seconds(0)
             last_reopen = Timer()
+            say_hello(conversation, hello, hello_spectators, board, hello_stockfish,
+                      hello_stockfish_spectators, build_greeting, hello_other_engine=hello_other_engine,
+                      hello_stockfish_bio=hello_stockfish_bio)
             while stay_in_game and (not stop.terminated or quit_after_all_games_finish) and not stop.force_quit:
                 move_attempted = False
                 try:
@@ -936,16 +920,10 @@ def play_game(li: lichess.Lichess,
                     elif u_type == "gameState":
                         game.state = upd
                         board = setup_board(game)
-                        if len(board.move_stack) >= 2:
-                            conversation.finish_pending_greeting()
                         takeback_field = game.state.get("btakeback") if game.is_white else game.state.get("wtakeback")
 
                         if not is_game_over(game) and is_engine_move(game, prior_game, board):
                             disconnect_time = correspondence_disconnect_time
-                            say_hello(conversation, hello, hello_spectators, hello_stockfish,
-                                      hello_stockfish_spectators, board, hello_rebranded_engine,
-                                      hello_rebranded_engine_spectators, rebranded_engines,
-                                      genuine_engine_accounts, build_greeting)
                             setup_timer = Timer()
                             print_move_number(board)
                             move_attempted = True
@@ -1010,6 +988,8 @@ def play_game(li: lichess.Lichess,
                         prior_game = None
                     else:
                         stay_in_game = not isinstance(e, StopIteration) and move_attempted
+                if stay_in_game and not is_game_over(game):
+                    conversation.check_bio_fallback()
 
             pgn_record = game_record_for_outputs(li, config, game, board, engine)
             save_opening_history_game(game.id,
@@ -1155,19 +1135,15 @@ def get_engine_build_info(engine_name: str) -> str:
 def say_hello(conversation: Conversation,
               hello: str,
               hello_spectators: str,
-              hello_stockfish: str,
-              hello_stockfish_spectators: str,
               board: chess.Board,
-              hello_rebranded_engine: str = "",
-              hello_rebranded_engine_spectators: str = "",
-              rebranded_engines: dict[str, list[str]] | None = None,
-              genuine_engine_accounts: dict[str, list[str]] | None = None,
-              build_greeting: str = "") -> None:
+              hello_stockfish: str = "",
+              hello_stockfish_spectators: str = "",
+              build_greeting: str = "", *, hello_other_engine: str = "", hello_stockfish_bio: str = "") -> None:
     """Send the greetings to the chat rooms."""
-    if len(board.move_stack) < 2:
-        conversation.start_greeting(hello, hello_spectators, hello_stockfish, hello_stockfish_spectators,
-                                    hello_rebranded_engine, hello_rebranded_engine_spectators, rebranded_engines,
-                                    genuine_engine_accounts, build_greeting)
+    conversation.start_greeting(hello, hello_spectators, hello_stockfish,
+                                hello_stockfish_spectators, build_greeting,
+                                other_engine=hello_other_engine, stockfish_bio=hello_stockfish_bio,
+                                announce=len(board.move_stack) < 2)
 
 
 def fake_think_time(config: Configuration, board: chess.Board, game: model.Game) -> datetime.timedelta:
