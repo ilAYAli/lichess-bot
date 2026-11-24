@@ -1769,7 +1769,7 @@ def log_python_and_libraries() -> None:
     logger.debug(text)
 
 
-def start_lichess_bot() -> None:
+def start_lichess_bot(check_active_games: bool = True) -> None:
     """Parse arguments passed to lichess-bot.py and starts lichess-bot."""
     parser = argparse.ArgumentParser(description="Play on Lichess with a bot")
     parser.add_argument("-u", action="store_true", help="Upgrade your account to a bot account.")
@@ -1817,6 +1817,16 @@ def start_lichess_bot() -> None:
         is_bot = upgrade_account(li)
 
     if is_bot:
+        if check_active_games:
+            active_games = li.get_ongoing_games()
+            if active_games is None:
+                logger.error("Could not check for active games. Refusing to start to avoid interfering with a running bot.")
+                return
+            if active_games:
+                game_ids = ", ".join(game["gameId"] for game in active_games)
+                logger.error(f"Already active Lichess game(s): {game_ids}. Refusing to start another bot instance.")
+                return
+
         start(li,
               user_profile,
               CONFIG,
@@ -1867,12 +1877,14 @@ def check_python_version() -> None:
 def start_program() -> None:
     """Start lichess-bot and restart when needed."""
     multiprocessing.set_start_method("spawn")
+    check_active_games = True
     try:
         while should_restart():
             disable_restart()
             # Restart on network errors.
             try:
-                start_lichess_bot()
+                start_lichess_bot(check_active_games)
+                check_active_games = False
             except RequestException:
                 stop.restart = True
                 logger.exception("Restarting lichess-bot due to a network error:")
