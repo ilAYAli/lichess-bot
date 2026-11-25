@@ -323,14 +323,17 @@ class EngineWrapper:
             acceptable_rating = (rating_diff is not None
                                  and (accept_draw_min_rating_diff is None
                                       or rating_diff >= accept_draw_min_rating_diff))
+            # Equal-position accept: weaker opponents need a longer equal stretch.
             accept_draw_score = self.draw_or_resign.accept_draw_score
-            dead_equal = (enough_scores and enough_pieces_for_accept
-                          and all(abs(actual(score)) <= accept_draw_score
-                                  for score in self.scores[-accept_draw_moves:]))
+            weaker_by = max(0, -rating_diff) if rating_diff is not None else 0
+            equal_moves = (accept_draw_moves
+                           + weaker_by * self.draw_or_resign.accept_draw_moves_per_100_elo // 100)
+            dead_equal = (len(self.scores) >= equal_moves and enough_pieces_for_accept
+                          and all(abs(actual(score)) <= accept_draw_score for score in self.scores[-equal_moves:]))
             if dead_equal:
                 result.draw_offered = True
                 logger.info(f"Accepting draw offer: score within +/-{accept_draw_score}cp "
-                            f"for {accept_draw_moves} moves.")
+                            f"for {equal_moves} moves.")
             elif enough_scores and enough_pieces_for_accept and acceptable_rating:
                 scores = self.scores[-accept_draw_moves:]
                 accept_score_threshold = 0
