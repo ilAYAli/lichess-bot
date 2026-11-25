@@ -68,6 +68,8 @@ def create_engine(engine_config: Configuration, game: model.Game | None = None) 
             raise ValueError(
                 f"    Invalid engine type: {engine_type}. Expected xboard, uci, or homemade.")
     options = remove_managed_options(cfg.lookup(f"{engine_type}_options") or Configuration({}))
+    if engine_type == "uci":
+        options |= rating_based_options(cfg.rating_based_options, game)
     logger.debug(f"Starting engine: {commands}")
     return Engine(commands, options, stderr, cfg.draw_or_resign, game, cfg.debug,
                   cwd=cfg.working_dir)
@@ -81,7 +83,47 @@ def remove_managed_options(config: Configuration) -> OPTIONS_GO_EGTB_TYPE:
     return {name: value for (name, value) in config.items() if not is_managed(name)}
 
 
+def game_rating_diff(game: model.Game | None) -> int | None:
+    """Return my rating minus the opponent's rating, or None if either rating is unknown."""
+    if game is None or game.me.rating is None or game.opponent.rating is None:
+        return None
+    return game.me.rating - game.opponent.rating
+
+
+def rating_based_options(cfg: Configuration | None, game: model.Game | None) -> OPTIONS_GO_EGTB_TYPE:
+    """
+    Pick engine options from the rating difference (my rating minus the opponent's).
+
+    `cfg` maps an option name to a list of `{min_diff, value}` levels. The level with the highest
+    `min_diff` not above the rating difference wins. Nothing is set when either rating is unknown
+    or no level matches, so the engine keeps its default.
+    """
+    diff = game_rating_diff(game)
+    if not cfg or diff is None:
+        return {}
+
+    options: OPTIONS_GO_EGTB_TYPE = {}
+    for name, levels in cfg.items():
+        matching = [level for level in levels or [] if diff >= level["min_diff"]]
+        if matching:
+            value = max(matching, key=lambda level: level["min_diff"])["value"]
+            options[name] = value
+            logger.info(f"Setting {name}={value} for rating difference {diff:+d}.")
+    return options
+
+
+def polyglot_config_for_game(polyglot_cfg: Configuration, game: model.Game | None) -> Configuration:
+    """Use the `lower_rated` book settings when the opponent is far enough below my rating."""
+    lower_rated = polyglot_cfg.lower_rated
+    diff = game_rating_diff(game)
+    if not lower_rated or diff is None or diff < lower_rated.min_diff:
+        return polyglot_cfg
+    overrides = {key: value for key, value in lower_rated.items() if key != "min_diff"}
+    return Configuration(polyglot_cfg.config | overrides)
+
+
 PONDERPV_CHARACTERS = 6  # The length of ", Pv: ".
+FIRST_MOVE_SEARCH_TIME = seconds(1)
 
 
 class EngineWrapper:
@@ -100,6 +142,7 @@ class EngineWrapper:
         self.go_commands = Configuration(cast(GO_COMMANDS_TYPE, options.pop("go_commands", {})) or {})
         self.move_commentary: list[InfoStrDict] = []
         self.comment_start_index = -1
+        self.game: model.Game | None = None
 
     def configure(self, options: OPTIONS_GO_EGTB_TYPE, game: model.Game | None) -> None:
         """
@@ -160,6 +203,7 @@ class EngineWrapper:
         online_moves_cfg = engine_cfg.online_moves
         draw_or_resign_cfg = engine_cfg.draw_or_resign
         lichess_bot_tbs = engine_cfg.lichess_bot_tbs
+        self.game = game
 
         best_move: MOVE
         best_move = get_book_move(board, game, polyglot_cfg)
@@ -224,19 +268,85 @@ class EngineWrapper:
         def actual(score: chess.engine.PovScore) -> int:
             return score.relative.score(mate_score=40000)
 
+        def relative_wdl(info: chess.engine.InfoDict) -> chess.engine.Wdl | None:
+            wdl = info.get("wdl")
+            if isinstance(wdl, chess.engine.PovWdl):
+                return wdl.relative
+
+            score = info.get("score")
+            if isinstance(score, chess.engine.PovScore):
+                return score.wdl(model="sf", ply=board.ply()).relative
+
+            if self.scores:
+                return self.scores[-1].wdl(model="sf", ply=board.ply()).relative
+
+            return None
+
+        def wdl_unfavorable(info: chess.engine.InfoDict) -> bool:
+            wdl = relative_wdl(info)
+            return wdl is not None and wdl.losses > wdl.wins
+
+        def position_stuck() -> bool:
+            if board.can_claim_draw():
+                return True
+            if result.move not in board.legal_moves:
+                return False
+            next_board = board.copy(stack=True)
+            next_board.push(result.move)
+            return next_board.can_claim_draw()
+
+        def draw_score_threshold() -> int:
+            threshold = self.draw_or_resign.draw_score_threshold
+            if not self.game or self.game.me.rating is None or self.game.opponent.rating is None:
+                return threshold
+            rating_diff = self.game.me.rating - self.game.opponent.rating
+            if rating_diff >= self.draw_or_resign.draw_score_lower_rated_min_diff:
+                return self.draw_or_resign.draw_score_lower_rated_threshold
+            return threshold
+
         can_offer_draw = self.draw_or_resign.offer_draw_enabled
-        draw_offer_moves = self.draw_or_resign.offer_draw_moves
-        draw_score_range: int = self.draw_or_resign.offer_draw_score
+        offer_draw_for_zero = self.draw_or_resign.offer_draw_for_egtb_zero
         draw_max_piece_count = self.draw_or_resign.offer_draw_pieces
         pieces_on_board = chess.popcount(board.occupied)
-        enough_pieces_captured = pieces_on_board <= draw_max_piece_count
-        if can_offer_draw and len(self.scores) >= draw_offer_moves and enough_pieces_captured:
-            scores = self.scores[-draw_offer_moves:]
+        enough_pieces_for_offer = pieces_on_board <= draw_max_piece_count
 
-            def score_near_draw(score: chess.engine.PovScore) -> bool:
-                return abs(actual(score)) <= draw_score_range
-            if len(scores) == len(list(filter(score_near_draw, scores))):
-                result.draw_offered = True
+        can_accept_draw = self.draw_or_resign.accept_draw_enabled
+        if can_accept_draw and self.game and check_for_draw_offer(self.game):
+            accept_draw_moves = self.draw_or_resign.accept_draw_moves
+            accept_draw_max_piece_count = self.draw_or_resign.accept_draw_pieces
+            accept_draw_min_rating_diff = self.draw_or_resign.accept_draw_min_rating_diff
+            enough_scores = len(self.scores) >= accept_draw_moves
+            enough_pieces_for_accept = pieces_on_board <= accept_draw_max_piece_count
+            rating_diff = None
+            if self.game.me.rating is not None and self.game.opponent.rating is not None:
+                rating_diff = self.game.opponent.rating - self.game.me.rating
+            acceptable_rating = (rating_diff is not None
+                                 and (accept_draw_min_rating_diff is None
+                                      or rating_diff >= accept_draw_min_rating_diff))
+            if enough_scores and enough_pieces_for_accept and acceptable_rating:
+                scores = self.scores[-accept_draw_moves:]
+                accept_score_threshold = 0
+                if rating_diff is not None and rating_diff < 0:
+                    accept_score_threshold = draw_score_threshold()
+
+                def score_clearly_losing(score: chess.engine.PovScore) -> bool:
+                    return actual(score) <= accept_score_threshold
+                if len(scores) == len(list(filter(score_clearly_losing, scores))):
+                    result.draw_offered = True
+                    logger.info(f"Accepting draw offer: opponent rating diff {rating_diff:+d}, "
+                                f"score {actual(scores[-1])}cp.")
+
+        if offer_draw_for_zero and self.is_tablebase_draw(result.info):
+            result.draw_offered = True
+            logger.info("Offering draw: engine reported tablebase draw.")
+
+        if can_offer_draw and enough_pieces_for_offer and wdl_unfavorable(result.info):
+            result.draw_offered = True
+            logger.info("Offering draw: WDL is unfavorable.")
+
+        if can_offer_draw and position_stuck():
+            result.draw_offered = True
+            logger.info("Offering draw: position is claimably drawn.")
 
         resign_enabled = self.draw_or_resign.resign_enabled
         min_moves_for_resign = self.draw_or_resign.resign_moves
@@ -344,6 +454,26 @@ class EngineWrapper:
             str_score = str(round(cp_score / 100, 2))
         return str_score
 
+    def readable_tablebase_status(self, info_string: str) -> str | None:
+        """Convert Enyo tablebase root markers into readable status text."""
+        parts = info_string.split()
+        if len(parts) >= 2 and parts[0] == "tbhit" and parts[1] in {"win", "draw", "loss"}:
+            status = f"TB {parts[1]}"
+            with contextlib.suppress(ValueError, IndexError):
+                dtz_index = parts.index("dtz")
+                status = f"{status} DTZ {parts[dtz_index + 1]}"
+            return status
+        return None
+
+    def is_tablebase_draw(self, info: chess.engine.InfoDict) -> bool:
+        """Check whether Enyo reported the root position as a tablebase draw."""
+        info_string = info.get("string")
+        if not isinstance(info_string, str):
+            return False
+
+        parts = info_string.split()
+        return len(parts) >= 2 and parts[0] == "tbhit" and parts[1] == "draw"
+
     def readable_wdl(self, wdl: chess.engine.PovWdl) -> str:
         """Convert the WDL score to a percentage, so it is more human-readable."""
         wdl_percentage = round(wdl.relative.expectation() * 100, 1)
@@ -377,6 +507,9 @@ class EngineWrapper:
         def identity(x: InfoDictValue) -> str:
             return str(x)
 
+        if stat == "Evaluation" and isinstance(info[stat], str):
+            return cast(str, info[stat])
+
         func = cast(Callable[[InfoDictValue], str], readable.get(stat, identity))
         return str(func(info[stat]))
 
@@ -387,7 +520,8 @@ class EngineWrapper:
         :param for_chat: Whether the stats will be sent to the game chat, which has a 140 character limit.
         """
         can_index = self.move_commentary and self.move_commentary[-1]
-        info: InfoStrDict = self.move_commentary[-1].copy() if can_index else {}
+        raw_info: InfoStrDict = self.move_commentary[-1].copy() if can_index else {}
+        info: InfoStrDict = raw_info.copy()
 
         def to_readable_item(stat: InfoDictKeys, value: InfoDictValue) -> tuple[InfoDictKeys, InfoDictValue]:
             readable = {"wdl": "winrate", "ponderpv": "PV", "nps": "speed", "score": "evaluation", "time": "movetime"}
@@ -399,6 +533,13 @@ class EngineWrapper:
 
         info = cast(InfoStrDict, dict(to_readable_item(cast(InfoDictKeys, key), cast(InfoDictValue, value))
                                       for (key, value) in info.items()))
+        tablebase_string = raw_info.get("string")
+        tablebase_status = self.readable_tablebase_status(tablebase_string) if isinstance(tablebase_string, str) else None
+        if tablebase_status:
+            info["Source"] = "Tablebase"
+            score = raw_info.get("score")
+            if not (isinstance(score, chess.engine.PovScore) and score.relative.mate() is not None):
+                info["Evaluation"] = tablebase_status
         if "Source" not in info:
             info["Source"] = "Engine"
 
@@ -431,6 +572,11 @@ class EngineWrapper:
     def name(self) -> str:
         """Get the name of the engine."""
         return self.engine.id["name"]
+
+    def engine_build_info(self) -> str:
+        """Get the engine's full startup identity when its protocol provides one."""
+        protocol = getattr(self.engine, "protocol", None)
+        return getattr(protocol, "startup_info", "") or self.name()
 
     def get_pid(self) -> str:
         """Get the pid of the engine."""
@@ -478,6 +624,18 @@ class EngineWrapper:
         self.engine.quit()
 
 
+class StartupInfoUciProtocol(chess.engine.UciProtocol):
+    """Capture the engine's startup identity line, which may include its net."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.startup_info = ""
+
+    def line_received(self, line: str) -> None:
+        if line.startswith("id ") and not line.startswith(("id name ", "id author ")):
+            self.startup_info = line[3:].strip()
+
+
 class UCIEngine(EngineWrapper):
     """The class used to communicate with UCI engines."""
 
@@ -496,8 +654,8 @@ class UCIEngine(EngineWrapper):
         :param popen_args: The cwd of the engine.
         """
         super().__init__(options, draw_or_resign)
-        self.engine = chess.engine.SimpleEngine.popen_uci(commands, timeout=60., debug=debug, setpgrp=True, stderr=stderr,
-                                                          **popen_args)
+        self.engine = chess.engine.SimpleEngine.popen(StartupInfoUciProtocol, commands, timeout=60., debug=debug,
+                                                      setpgrp=True, stderr=stderr, **popen_args)
         self.configure(options, game)
 
 
@@ -657,10 +815,10 @@ def move_time(board: chess.Board,
     :param correspondence_move_time: How much time to use for this move it it is a correspondence game.
     :return: The time to choose a move and whether the bot can ponder after the move.
     """
-    if len(board.move_stack) < 2:
-        return first_move_time(game), False  # No pondering after the first move since a new clock starts afterwards.
     if is_correspondence:
         return single_move_time(board, game, correspondence_move_time, setup_timer, move_overhead), can_ponder
+    if len(board.move_stack) < 2:
+        return first_move_time(board, game, setup_timer, move_overhead), False
     return game_clock_time(board, game, setup_timer, move_overhead), can_ponder
 
 
@@ -694,15 +852,22 @@ def single_move_time(board: chess.Board, game: model.Game, search_time: datetime
     return chess.engine.Limit(time=to_seconds(search_time), clock_id="correspondence")
 
 
-def first_move_time(game: model.Game) -> chess.engine.Limit:
+def first_move_time(board: chess.Board,
+                    game: model.Game,
+                    setup_timer: Timer,
+                    move_overhead: datetime.timedelta) -> chess.engine.Limit:
     """
     Determine time limit for the first move in the game.
 
+    :param board: The current positions.
     :param game: The game that the bot is playing.
+    :param setup_timer: How much time has passed since receiving the opponent's move.
+    :param move_overhead: The time it takes to communicate between the engine and lichess-bot.
     :return: The time to choose the first move.
     """
-    # Need to hardcode first movetime since Lichess has 30 sec limit.
-    search_time = seconds(10)
+    overhead = setup_timer.time_since_reset() + move_overhead
+    clock_time = max(msec(1), msec(game.state[wbtime(board)]) - overhead)
+    search_time = min(FIRST_MOVE_SEARCH_TIME, clock_time)
     logger.info(f"Searching for time {sec_str(search_time)} seconds for game {game.id}")
     return chess.engine.Limit(time=to_seconds(search_time), clock_id="first move")
 
@@ -742,6 +907,7 @@ def get_book_move(board: chess.Board, game: model.Game,
                   polyglot_cfg: Configuration) -> chess.engine.PlayResult:
     """Get a move from an opening book."""
     no_book_move = chess.engine.PlayResult(None, None)
+    polyglot_cfg = polyglot_config_for_game(polyglot_cfg, game)
     use_book = polyglot_cfg.enabled
     max_game_length = polyglot_cfg.max_depth * 2 - 1
     if not use_book or len(board.move_stack) > max_game_length:
@@ -768,7 +934,10 @@ def get_book_move(board: chess.Board, game: model.Game,
 
                 match selection:
                     case "weighted_random":
-                        move = reader.weighted_choice(board).move
+                        entries = [entry for entry in reader.find_all(board) if entry.weight >= min_weight]
+                        if not entries:
+                            raise IndexError
+                        move = random.choices(entries, weights=[entry.weight for entry in entries])[0].move
                     case "uniform_random":
                         move = reader.choice(board, minimum_weight=min_weight).move
                     case "best_move":
@@ -794,9 +963,8 @@ def get_online_move(li: lichess.Lichess, board: chess.Board, game: model.Game, o
     online_egtb_cfg = online_moves_cfg.online_egtb
     best_move, wdl, comment = get_online_egtb_move(li, board, game, online_egtb_cfg)
     if best_move is not None:
-        can_offer_draw = draw_or_resign_cfg.offer_draw_enabled
         offer_draw_for_zero = draw_or_resign_cfg.offer_draw_for_egtb_zero
-        offer_draw = can_offer_draw and offer_draw_for_zero and wdl == 0
+        offer_draw = offer_draw_for_zero and wdl == 0
 
         can_resign = draw_or_resign_cfg.resign_enabled
         resign_on_egtb_loss = draw_or_resign_cfg.resign_for_egtb_minus_two
@@ -1031,9 +1199,8 @@ def get_egtb_move(board: chess.Board, game: model.Game, lichess_bot_tbs: Configu
         best_move, wdl = get_gaviota(board, game, lichess_bot_tbs.gaviota)
         source = "lichess-bot-source:Gaviota EGTB"
     if best_move:
-        can_offer_draw = draw_or_resign_cfg.offer_draw_enabled
         offer_draw_for_zero = draw_or_resign_cfg.offer_draw_for_egtb_zero
-        offer_draw = bool(can_offer_draw and offer_draw_for_zero and wdl == 0)
+        offer_draw = bool(offer_draw_for_zero and wdl == 0)
 
         can_resign = draw_or_resign_cfg.resign_enabled
         resign_on_egtb_loss = draw_or_resign_cfg.resign_for_egtb_minus_two

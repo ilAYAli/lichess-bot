@@ -148,6 +148,7 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     set_config_default(CONFIG, key="quit_after_all_games_finish", default=False)
     set_config_default(CONFIG, key="rate_limiting_delay", default=0)
     set_config_default(CONFIG, key="pgn_directory", default=None)
+    set_config_default(CONFIG, key="save_pgn", default=True)
     set_config_default(CONFIG, key="pgn_file_grouping", default="game", force_empty_values=True)
     set_config_default(CONFIG, key="max_takebacks_accepted", default=0, force_empty_values=True)
     set_config_default(CONFIG, "engine", key="interpreter", default=None)
@@ -164,6 +165,14 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     set_config_default(CONFIG, "engine", "draw_or_resign", key="offer_draw_moves", default=5)
     set_config_default(CONFIG, "engine", "draw_or_resign", key="offer_draw_score", default=0)
     set_config_default(CONFIG, "engine", "draw_or_resign", key="offer_draw_pieces", default=10)
+    set_config_default(CONFIG, "engine", "draw_or_resign", key="draw_score_threshold", default=-50)
+    set_config_default(CONFIG, "engine", "draw_or_resign", key="draw_score_lower_rated_threshold", default=-250)
+    set_config_default(CONFIG, "engine", "draw_or_resign", key="draw_score_lower_rated_min_diff", default=200)
+    set_config_default(CONFIG, "engine", "draw_or_resign", key="accept_draw_enabled", default=False)
+    set_config_default(CONFIG, "engine", "draw_or_resign", key="accept_draw_score", default=100)
+    set_config_default(CONFIG, "engine", "draw_or_resign", key="accept_draw_moves", default=1)
+    set_config_default(CONFIG, "engine", "draw_or_resign", key="accept_draw_pieces", default=32)
+    set_config_default(CONFIG, "engine", "draw_or_resign", key="accept_draw_min_rating_diff", default=0)
     set_config_default(CONFIG, "engine", "online_moves", key="max_out_of_book_moves", default=10)
     set_config_default(CONFIG, "engine", "online_moves", key="max_retries", default=2, force_empty_values=True)
     set_config_default(CONFIG, "engine", "online_moves", key="max_depth", default=math.inf, force_empty_values=True)
@@ -204,6 +213,8 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     set_config_default(CONFIG, "engine", "polyglot", key="selection", default="weighted_random")
     set_config_default(CONFIG, "engine", "polyglot", key="min_weight", default=1)
     set_config_default(CONFIG, "engine", "polyglot", key="normalization", default="none")
+    set_config_default(CONFIG, "engine", "polyglot", key="lower_rated", default=None)
+    set_config_default(CONFIG, "engine", key="rating_based_options", default=None)
     set_config_default(CONFIG, "challenge", key="concurrency", default=1)
     set_config_default(CONFIG, "challenge", key="games_reserved_for_humans", default=0)
     set_config_default(CONFIG, "challenge", key="sort_by", default="best")
@@ -216,12 +227,19 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     set_config_default(CONFIG, "challenge", key="min_base", default=0)
     set_config_default(CONFIG, "challenge", key="max_days", default=math.inf)
     set_config_default(CONFIG, "challenge", key="min_days", default=1)
+    set_config_default(CONFIG, "challenge", key="casual_time_controls", default=None)
+    if CONFIG["challenge"]["casual_time_controls"] is not None:
+        change_value_to_list(CONFIG, "challenge", key="casual_time_controls")
     set_config_default(CONFIG, "challenge", key="block_list", default=[], force_empty_values=True)
     set_config_default(CONFIG, "challenge", key="online_block_list", default=[], force_empty_values=True)
     set_config_default(CONFIG, "challenge", key="allow_list", default=[], force_empty_values=True)
     set_config_default(CONFIG, "challenge", key="min_rating", default=0, force_empty_values=True)
     set_config_default(CONFIG, "challenge", key="max_rating", default=4000, force_empty_values=True)
     set_config_default(CONFIG, "challenge", key="rating_difference", default=None)
+    set_config_default(CONFIG, "challenge", key="rating_difference_allow_higher", default=False)
+    set_config_default(CONFIG, "challenge", key="rating_difference_by_speed", default=None)
+    set_config_default(CONFIG, "challenge", key="ignore_casual_rating", default=False)
+    set_config_default(CONFIG, "challenge", key="ignore_casual_human_rating", default=False)
     set_config_default(CONFIG, "challenge", key="max_simultaneous_games_per_user", default=5)
     set_config_default(CONFIG, "correspondence", key="checkin_period", default=600)
     set_config_default(CONFIG, "correspondence", key="move_time", default=60, force_empty_values=True)
@@ -260,6 +278,11 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     for greeting in ["hello", "goodbye"]:
         for target in ["", "_spectators"]:
             set_config_default(CONFIG, "greeting", key=greeting + target, default="", force_empty_values=True)
+    set_config_default(CONFIG, "greeting", key="hello_stockfish", default="", force_empty_values=True)
+    set_config_default(CONFIG, "greeting", key="hello_stockfish_spectators", default="", force_empty_values=True)
+    set_config_default(CONFIG, "greeting", key="hello_other_engine", default="", force_empty_values=True)
+    set_config_default(CONFIG, "greeting", key="hello_no_engine_report", default="", force_empty_values=True)
+    set_config_default(CONFIG, "greeting", key="hello_stockfish_bio", default="", force_empty_values=True)
 
 
 def process_block_list(CONFIG: CONFIG_DICT_TYPE) -> None:
@@ -284,6 +307,25 @@ def log_config(CONFIG: CONFIG_DICT_TYPE, alternate_log_function: Callable[[str],
     destination = alternate_log_function or logger.debug
     destination(f"Config:\n{yaml.dump(logger_config, sort_keys=False)}")
     destination("====================")
+
+
+def validate_rating_based_config(CONFIG: CONFIG_DICT_TYPE, polyglot_selections: list[str]) -> None:
+    """Check `engine:polyglot:lower_rated` and `engine:rating_based_options`."""
+    polyglot_section = CONFIG["engine"].get("polyglot") or {}
+    lower_rated = polyglot_section.get("lower_rated")
+    if lower_rated:
+        config_assert(isinstance(lower_rated.get("min_diff"), int),
+                      "`engine:polyglot:lower_rated:min_diff` must be an integer.")
+        config_assert(lower_rated.get("selection", polyglot_section.get("selection")) in polyglot_selections,
+                      f"`engine:polyglot:lower_rated:selection` must be one of {polyglot_selections}.")
+        config_assert(lower_rated.get("normalization", "none") in ["none", "max", "sum"],
+                      "`engine:polyglot:lower_rated:normalization` must be one of ['none', 'max', 'sum'].")
+
+    for name, levels in (CONFIG["engine"].get("rating_based_options") or {}).items():
+        config_assert(isinstance(levels, list) and all(isinstance(level, dict)
+                                                       and isinstance(level.get("min_diff"), int)
+                                                       and "value" in level for level in levels),
+                      f"`engine:rating_based_options:{name}` must be a list of {{min_diff: <int>, value: <value>}}.")
 
 
 def validate_config(CONFIG: CONFIG_DICT_TYPE) -> None:
@@ -341,6 +383,9 @@ def validate_config(CONFIG: CONFIG_DICT_TYPE) -> None:
 
     config_warn(CONFIG["challenge"]["min_rating"] <= CONFIG["challenge"]["max_rating"],
                 "challenge.max_rating < challenge.min_rating will result in no challenges being accepted.")
+    for speed, diff in (CONFIG["challenge"].get("rating_difference_by_speed") or {}).items():
+        config_assert(isinstance(diff, int) and diff >= 0,
+                      f"`challenge:rating_difference_by_speed:{speed}` must be a non-negative integer.")
     config_warn(CONFIG["challenge"].get("rating_difference") is None
                 or CONFIG["challenge"].get("rating_difference") >= 0,
                 "challenge.rating_difference < 0 will result in no challenges being accepted.")
@@ -414,6 +459,8 @@ def validate_config(CONFIG: CONFIG_DICT_TYPE) -> None:
     config_assert(polyglot_section.get("normalization") in ["none", "max", "sum"],
                   f"`{polyglot_section.get('normalization')}` is not a valid choice for "
                   f"`engine:polyglot:normalization`. Please choose from ['none', 'max', 'sum'].")
+
+    validate_rating_based_config(CONFIG, selection_choices["polyglot"])
 
     lichess_tbs_config = CONFIG["engine"].get("lichess_bot_tbs") or {}
     quality_selections = ["best", "suggest"]

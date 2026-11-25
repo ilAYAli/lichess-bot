@@ -71,6 +71,14 @@ class VersioningType(TypedDict):
 
 logger = logging.getLogger(__name__)
 
+try:
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from notify_ntfy import maybe_notify_game, maybe_notify_game_start
+except Exception:
+    maybe_notify_game = None
+    maybe_notify_game_start = None
+
 with open(os.path.join(os.path.dirname(__file__), "versioning.yml")) as version_file:
     versioning_info: VersioningType = yaml.safe_load(version_file)
 
@@ -143,21 +151,26 @@ def do_correspondence_ping(control_queue: CONTROL_QUEUE_TYPE, period: datetime.t
         control_queue.put_nowait({"type": "correspondence_ping"})
 
 
-def write_pgn_records(pgn_queue: PGN_QUEUE_TYPE, config: Configuration, username: str) -> None:
+def write_pgn_records(pgn_queue: PGN_QUEUE_TYPE,
+                      config: Configuration,
+                      username: str,
+                      logging_queue: LOGGING_QUEUE_TYPE | None = None) -> None:
     """Write PGN records to files as games finish."""
+    if logging_queue is not None:
+        thread_logging_configurer(logging_queue)
     while True:
-        mark_task_done = False
         try:
             event = pgn_queue.get()
-            mark_task_done = True
-            if event:
-                save_pgn_record(event, config, username)
         except InterruptedError:
-            pass
-        except Exception:
-            logger.exception("Could not write PGN to file")
+            continue
 
-        if mark_task_done:
+        try:
+            if event is None:
+                return
+            save_pgn_record(event, config, username)
+        except Exception:
+            logger.exception("Could not process completed game record")
+        finally:
             pgn_queue.task_done()
 
 
@@ -169,8 +182,15 @@ def logging_configurer(level: int, filename: str | None, disable_auto_logs: bool
     :param filename: The filename to write the logs to. If it is `None` then the logs aren't written to a file.
     :param disable_auto_logs: Whether to disable automatic logging.
     """
+    class UnicodeSafeFormatter(logging.Formatter):
+        """Escape lone surrogates before sending log text to output handlers."""
+
+        def format(self, record: logging.LogRecord) -> str:
+            formatted = super().format(record)
+            return formatted.encode("utf-8", errors="backslashreplace").decode("utf-8")
+
     console_handler = RichHandler()
-    console_formatter = logging.Formatter("%(message)s")
+    console_formatter = UnicodeSafeFormatter("%(message)s")
     console_handler.setFormatter(console_formatter)
     console_handler.setLevel(level)
     all_handlers: list[logging.Handler] = [console_handler]
@@ -178,7 +198,7 @@ def logging_configurer(level: int, filename: str | None, disable_auto_logs: bool
     if filename:
         file_handler = logging.FileHandler(filename, delay=True, encoding="utf-8")
         FORMAT = "%(asctime)s %(name)s (%(filename)s:%(lineno)d) %(levelname)s %(message)s"
-        file_formatter = logging.Formatter(FORMAT)
+        file_formatter = UnicodeSafeFormatter(FORMAT)
         file_handler.setFormatter(file_formatter)
         file_handler.setLevel(level)
         all_handlers.append(file_handler)
@@ -196,7 +216,7 @@ def logging_configurer(level: int, filename: str | None, disable_auto_logs: bool
         auto_file_handler.setLevel(logging.DEBUG)
 
         FORMAT = "%(asctime)s %(name)s (%(filename)s:%(lineno)d) %(levelname)s %(message)s"
-        file_formatter = logging.Formatter(FORMAT)
+        file_formatter = UnicodeSafeFormatter(FORMAT)
         auto_file_handler.setFormatter(file_formatter)
         all_handlers.append(auto_file_handler)
 
@@ -243,7 +263,8 @@ def thread_logging_configurer(queue: LOGGING_QUEUE_TYPE) -> None:
 
 
 def start(li: lichess.Lichess, user_profile: UserProfileType, config: Configuration, logging_level: int,
-          log_filename: str | None, disable_auto_logging: bool, one_game: bool = False) -> None:
+          log_filename: str | None, disable_auto_logging: bool, one_game: bool = False,
+          direct_challenge: str | None = None) -> None:
     """
     Start lichess-bot.
 
@@ -254,6 +275,7 @@ def start(li: lichess.Lichess, user_profile: UserProfileType, config: Configurat
     :param log_filename: The filename to write the logs to. If it is `None` then the logs aren't written to a file.
     :param disable_auto_logging: Whether to disable automatic logging.
     :param one_game: Whether the bot should play only one game. Only used in `test_bot/test_bot.py` to test lichess-bot.
+    :param direct_challenge: A username to challenge once after the event stream is connected.
     """
     logger.info(f"You're now connected to {config.url} and awaiting challenges.")
     manager = multiprocessing.Manager()
@@ -279,7 +301,8 @@ def start(li: lichess.Lichess, user_profile: UserProfileType, config: Configurat
     pgn_listener = multiprocessing.Process(target=write_pgn_records,
                                            args=(pgn_queue,
                                                  config,
-                                                 user_profile["username"]))
+                                                 user_profile["username"],
+                                                 logging_queue))
     pgn_listener.start()
 
     thread_logging_configurer(logging_queue)
@@ -293,18 +316,23 @@ def start(li: lichess.Lichess, user_profile: UserProfileType, config: Configurat
                          correspondence_queue,
                          logging_queue,
                          pgn_queue,
-                         one_game)
+                         one_game,
+                         direct_challenge)
     finally:
         control_stream.terminate()
         control_stream.join()
         correspondence_pinger.terminate()
         correspondence_pinger.join()
+        with contextlib.suppress(Exception):
+            pgn_queue.put_nowait(None)
+        pgn_listener.join(timeout=10)
+        if pgn_listener.is_alive():
+            pgn_listener.terminate()
+            pgn_listener.join()
         time.sleep(1.0)  # Allow final messages in logging_queue to be handled.
         logging_configurer(logging_level, log_filename, disable_auto_logging)
         logging_listener.terminate()
         logging_listener.join()
-        pgn_listener.terminate()
-        pgn_listener.join()
 
 
 def log_proc_count(change: str, active_games: ActiveGames) -> None:
@@ -327,7 +355,8 @@ def lichess_bot_main(li: lichess.Lichess,
                      correspondence_queue: CORRESPONDENCE_QUEUE_TYPE,
                      logging_queue: LOGGING_QUEUE_TYPE,
                      pgn_queue: PGN_QUEUE_TYPE,
-                     one_game: bool) -> None:
+                     one_game: bool,
+                     direct_challenge: str | None) -> None:
     """
     Handle all the games and challenges.
 
@@ -340,12 +369,16 @@ def lichess_bot_main(li: lichess.Lichess,
     :param logging_queue: The logging queue. Used by `logging_listener_proc`.
     :param pgn_queue: The queue containing the PGN games.
     :param one_game: Whether the bot should play only one game. Only used in `test_bot/test_bot.py` to test lichess-bot.
+    :param direct_challenge: A username to challenge once after the event stream is connected.
     """
     max_games = config.challenge.concurrency
     reserved_for_humans = min(config.challenge.games_reserved_for_humans, max_games)
     max_bot_games = max_games - reserved_for_humans
 
-    one_game_completed = False
+    one_game_stopping = False
+    direct_challenge_sent = False
+    direct_challenge_id = ""
+    direct_challenge_timer = Timer(seconds(25))
 
     all_games = li.get_ongoing_games() or []
     prune_takeback_records(all_games)
@@ -358,6 +391,8 @@ def lichess_bot_main(li: lichess.Lichess,
     last_check_online_time = Timer(hours(1))
     matchmaker = matchmaking.Matchmaking(li, config, user_profile)
     matchmaker.show_earliest_challenge_time()
+    if direct_challenge:
+        logger.info(f"Will send one direct challenge to {direct_challenge}.")
 
     play_game_args = PlayGameArgsType(li=li, control_queue=control_queue, user_profile=user_profile,
                                       config=config, challenge_queue=challenge_queue,
@@ -373,7 +408,7 @@ def lichess_bot_main(li: lichess.Lichess,
         logger.info("Press Ctrl-C twice to quit immediately.")
 
     with multiprocessing.pool.Pool(max_games + 1) as pool:
-        while not (stop.terminated or (one_game and one_game_completed) or stop.restart):
+        while not (stop.terminated or stop.restart or (one_game_stopping and not active_games)):
             event = next_event(control_queue)
             if not event:
                 continue
@@ -387,22 +422,37 @@ def lichess_bot_main(li: lichess.Lichess,
                 active_games.remove_game(event["game"]["id"])
                 matchmaker.game_done()
                 log_proc_count("Freed", active_games)
-                one_game_completed = True
+                if one_game:
+                    one_game_stopping = True
             elif event["type"] == "challenge":
-                handle_challenge(event,
-                                 li,
-                                 challenge_queue,
-                                 config.challenge,
-                                 user_profile,
-                                 recent_bot_challenges,
-                                 online_block_list)
+                if direct_challenge:
+                    chlng = model.Challenge(event["challenge"], user_profile)
+                    if not chlng.from_self:
+                        logger.info(f"Decline {chlng} while waiting for direct challenge.")
+                        li.decline_challenge(chlng.id, reason="later")
+                else:
+                    handle_challenge(event,
+                                     li,
+                                     challenge_queue,
+                                     config.challenge,
+                                     user_profile,
+                                     recent_bot_challenges,
+                                     online_block_list)
             elif event["type"] == "challengeDeclined":
                 matchmaker.declined_challenge(event, active_games)
+                if direct_challenge_id and event["challenge"]["id"] == direct_challenge_id:
+                    logger.info(f"Direct challenge id {direct_challenge_id} was declined.")
+                    one_game_stopping = True
             elif event["type"] == "challengeCanceled":
                 active_games.remove_game(event["challenge"]["id"])
                 log_proc_count("Freed", active_games)
+                if direct_challenge_id and event["challenge"]["id"] == direct_challenge_id:
+                    logger.info(f"Direct challenge id {direct_challenge_id} was canceled.")
+                    one_game_stopping = True
             elif event["type"] == "gameStart":
                 matchmaker.accepted_challenge(event, active_games)
+                if maybe_notify_game_start:
+                    maybe_notify_game_start(event)
                 start_game(event,
                            pool,
                            play_game_args,
@@ -420,8 +470,22 @@ def lichess_bot_main(li: lichess.Lichess,
                                              play_game_args,
                                              active_games,
                                              max_games)
-            accept_challenges(li, challenge_queue, active_games, max_games, max_bot_games)
-            matchmaker.challenge(active_games, challenge_queue, max_bot_games)
+            if not one_game_stopping:
+                if direct_challenge:
+                    if not direct_challenge_sent:
+                        if not active_games:
+                            direct_challenge_id = matchmaker.challenge_username(direct_challenge)
+                            direct_challenge_sent = True
+                            direct_challenge_timer.reset()
+                            if not direct_challenge_id:
+                                one_game_stopping = True
+                    elif direct_challenge_id and not active_games and direct_challenge_timer.is_expired():
+                        li.cancel(direct_challenge_id)
+                        logger.info(f"Direct challenge id {direct_challenge_id} timed out.")
+                        one_game_stopping = True
+                else:
+                    accept_challenges(li, challenge_queue, active_games, max_games, max_bot_games)
+                    matchmaker.challenge(active_games, challenge_queue, max_bot_games)
             check_online_status(li, user_profile, last_check_online_time)
 
             control_queue.task_done()
@@ -567,6 +631,32 @@ def game_is_active(li: lichess.Lichess, game_id: str) -> bool:
     return game_id in (ongoing_game["gameId"] for ongoing_game in active_games)
 
 
+def is_rejected_move_submission(game: model.Game, exception: BaseException) -> bool:
+    """Return whether Lichess rejected a move POST for this game."""
+    if not isinstance(exception, HTTPError) or exception.response is None:
+        return False
+    if exception.response.status_code >= 500:
+        return False
+
+    url = getattr(exception.response, "url", "") or ""
+    return f"/api/bot/game/{game.id}/move/" in url
+
+
+def refresh_game_state_from_stream(li: lichess.Lichess, game: model.Game) -> bool:
+    """Refresh a game state snapshot without reopening the game worker."""
+    try:
+        with li.get_game_stream(game.id) as response:
+            initial_state = json.loads(next(response.iter_lines(chunk_size=1)).decode("utf-8"))
+            state = initial_state.get("state")
+            if isinstance(state, dict):
+                game.state = state
+                return True
+    except (HTTPError, ReadTimeout, RemoteDisconnected, ChunkedEncodingError, RequestsConnectionError,
+            StopIteration, json.JSONDecodeError):
+        logger.warning(f"Could not refresh state for {game.url()} after rejected move.", exc_info=True)
+    return False
+
+
 def start_game_thread(active_games: ActiveGames, game_id: str, opponent_name: str,
                       play_game_args: PlayGameArgsType, pool: POOL_TYPE) -> None:
     """Start a game thread, unless the game already has one (e.g., a repeated `gameStart` after a reconnect)."""
@@ -582,10 +672,13 @@ def start_game_thread(active_games: ActiveGames, game_id: str, opponent_name: st
         control_queue = play_game_args["control_queue"]
         pgn_queue = play_game_args["pgn_queue"]
         li = play_game_args["li"]
-        control_queue.put_nowait({"type": "local_game_done", "game": {"id": game_id}})
+        config = play_game_args["config"]
+        complete = not game_is_active(li, game_id)
+        pgn = li.get_game_pgn(game_id) if config.save_pgn else ""
         pgn_queue.put_nowait({"game": {"id": game_id,
-                                       "pgn": li.get_game_pgn(game_id),
-                                       "complete": not game_is_active(li, game_id)}})
+                                       "pgn": pgn,
+                                       "complete": complete}})
+        control_queue.put_nowait({"type": "local_game_done", "game": {"id": game_id}})
 
     pool.apply_async(play_game,
                      kwds=play_game_args,
@@ -700,7 +793,12 @@ def play_game(li: lichess.Lichess,
         abort_time = seconds(config.abort_time)
         game = model.Game(initial_state, user_profile["username"], li.baseUrl, abort_time)
 
+        game_log_path = get_game_log_path(config, game)
         with engine_wrapper.create_engine(config, game) as engine:
+            if game_log_path:
+                preserve_existing_game_log(game_log_path)
+                os.makedirs(os.path.dirname(game_log_path), exist_ok=True)
+                engine.configure({"logfile": game_log_path}, game)
             engine.get_opponent_info(game)
             logger.debug(f"The engine for game {game_id} has pid={engine.get_pid()}")
             conversation = Conversation(game, engine, li, __version__, challenge_queue)
@@ -722,19 +820,32 @@ def play_game(li: lichess.Lichess,
             max_takebacks_accepted = config.max_takebacks_accepted
 
             keyword_map: defaultdict[str, str] = defaultdict(str, me=game.me.name, opponent=game.opponent.name)
+            keyword_map["build_info"] = get_engine_build_info(engine.engine_build_info())
+            build_greeting = f"I am {keyword_map['build_info']}"
             hello = get_greeting("hello", config.greeting, keyword_map)
+            keyword_map["engine_info"] = "{engine_info}"
+            hello_stockfish = get_greeting("hello_stockfish", config.greeting, keyword_map)
+            hello_stockfish_spectators = get_greeting("hello_stockfish_spectators", config.greeting, keyword_map)
+            hello_other_engine = get_greeting("hello_other_engine", config.greeting, keyword_map)
+            hello_no_engine_report = get_greeting("hello_no_engine_report", config.greeting, keyword_map)
+            hello_stockfish_bio = get_greeting("hello_stockfish_bio", config.greeting, keyword_map)
+            keyword_map.pop("engine_info")
             goodbye = get_greeting("goodbye", config.greeting, keyword_map)
             hello_spectators = get_greeting("hello_spectators", config.greeting, keyword_map)
             goodbye_spectators = get_greeting("goodbye_spectators", config.greeting, keyword_map)
 
             disconnect_time = correspondence_disconnect_time if not game.state.get("moves") else seconds(0)
             prior_game = None
-            board = chess.Board()
+            board = setup_board(game)
             game_stream: Iterator[bytes] = itertools.chain([json.dumps(game.state).encode("utf-8")], lines)
             quit_after_all_games_finish = config.quit_after_all_games_finish
             stay_in_game = True
             reopen_delay = seconds(0)
             last_reopen = Timer()
+            say_hello(conversation, hello, hello_spectators, board, hello_stockfish,
+                      hello_stockfish_spectators, build_greeting, hello_other_engine=hello_other_engine,
+                      hello_stockfish_bio=hello_stockfish_bio,
+                      hello_no_engine_report=hello_no_engine_report)
             while stay_in_game and (not stop.terminated or quit_after_all_games_finish) and not stop.force_quit:
                 move_attempted = False
                 try:
@@ -749,7 +860,6 @@ def play_game(li: lichess.Lichess,
 
                         if not is_game_over(game) and is_engine_move(game, prior_game, board):
                             disconnect_time = correspondence_disconnect_time
-                            say_hello(conversation, hello, hello_spectators, board)
                             setup_timer = Timer()
                             print_move_number(board)
                             move_attempted = True
@@ -785,6 +895,23 @@ def play_game(li: lichess.Lichess,
                         stay_in_game = False
                 except (HTTPError, ReadTimeout, RemoteDisconnected, ChunkedEncodingError, RequestsConnectionError,
                         lichess.RateLimitedError, StopIteration) as e:
+                    if is_rejected_move_submission(game, e):
+                        status_code = (e.response.status_code
+                                       if isinstance(e, HTTPError) and e.response is not None
+                                       else "unknown")
+                        logger.warning(f"Move for {game.url()} was rejected by Lichess ({status_code}); "
+                                       "refreshing game state.")
+                        if refresh_game_state_from_stream(li, game):
+                            board = setup_board(game)
+                            if is_game_over(game):
+                                tell_user_game_result(game, board)
+                                engine.send_game_result(game, board)
+                                conversation.send_message("player", goodbye)
+                                conversation.send_message("spectator", goodbye_spectators)
+                                stay_in_game = False
+                                continue
+                        raise GameStreamReconnect(game.id) from e
+
                     if should_reopen_game_stream(li, game, e):
                         reopen_delay = game_stream_reopen_delay(reopen_delay, last_reopen)
                         time.sleep(to_seconds(reopen_delay))
@@ -795,8 +922,16 @@ def play_game(li: lichess.Lichess,
                         prior_game = None
                     else:
                         stay_in_game = not isinstance(e, StopIteration) and move_attempted
+                if stay_in_game and not is_game_over(game):
+                    conversation.check_bio_fallback()
 
-            pgn_record = try_get_pgn_game_record(li, config, game, board, engine)
+            pgn_record = game_record_for_outputs(li, config, game, board, engine)
+            if is_game_over(game) and maybe_notify_game:
+                try:
+                    maybe_notify_game(game, pgn_record)
+                except Exception:
+                    pass
+        move_game_log_to_result_directory(game_log_path, game)
         final_queue_entries(control_queue, correspondence_queue, game, is_correspondence, pgn_record, pgn_queue)
         delete_takeback_record(game)
 
@@ -913,11 +1048,33 @@ def get_greeting(greeting: str, greeting_cfg: Configuration, keyword_map: defaul
     return greeting_text.format_map(keyword_map)
 
 
-def say_hello(conversation: Conversation, hello: str, hello_spectators: str, board: chess.Board) -> None:
+def get_engine_build_info(engine_name: str) -> str:
+    """Format the engine's UCI name for greetings, omitting its build date."""
+    if " built " not in engine_name:
+        return engine_name
+    identity, details = engine_name.split(" built ", 1)
+    net_marker = " using net: "
+    if net_marker in details:
+        net = details.split(net_marker, 1)[1].strip()
+        if net:
+            return f"{identity} using net: {net}"
+    return identity
+
+
+def say_hello(conversation: Conversation,
+              hello: str,
+              hello_spectators: str,
+              board: chess.Board,
+              hello_stockfish: str = "",
+              hello_stockfish_spectators: str = "",
+              build_greeting: str = "", *, hello_other_engine: str = "", hello_stockfish_bio: str = "",
+              hello_no_engine_report: str = "") -> None:
     """Send the greetings to the chat rooms."""
-    if len(board.move_stack) < 2:
-        conversation.send_message("player", hello)
-        conversation.send_message("spectator", hello_spectators)
+    conversation.start_greeting(hello, hello_spectators, hello_stockfish,
+                                hello_stockfish_spectators, build_greeting,
+                                other_engine=hello_other_engine, stockfish_bio=hello_stockfish_bio,
+                                no_engine_report=hello_no_engine_report,
+                                announce=len(board.move_stack) < 2)
 
 
 def fake_think_time(config: Configuration, board: chess.Board, game: model.Game) -> datetime.timedelta:
@@ -1023,10 +1180,10 @@ def final_queue_entries(control_queue: CONTROL_QUEUE_TYPE, correspondence_queue:
     else:
         logger.info(f"--- {game.url()} Game over")
 
-    control_queue.put_nowait({"type": "local_game_done", "game": {"id": game.id}})
     pgn_queue.put_nowait({"game": {"id": game.id,
                                    "pgn": pgn_record,
                                    "complete": is_game_over(game)}})
+    control_queue.put_nowait({"type": "local_game_done", "game": {"id": game.id}})
 
 
 def game_changed(current_game: model.Game, prior_game: model.Game | None) -> bool:
@@ -1094,7 +1251,20 @@ def try_get_pgn_game_record(li: lichess.Lichess, config: Configuration, game: mo
         return pgn_game_record(li, config, game, board, engine)
     except Exception:
         logger.exception("Error writing game record:")
+        with contextlib.suppress(Exception):
+            return li.get_game_pgn(game.id)
         return ""
+
+
+def game_record_for_outputs(li: lichess.Lichess,
+                            config: Configuration,
+                            game: model.Game,
+                            board: chess.Board,
+                            engine: engine_wrapper.EngineWrapper) -> str:
+    """Get a PGN when game-file saving is enabled."""
+    if config.save_pgn:
+        return try_get_pgn_game_record(li, config, game, board, engine)
+    return ""
 
 
 def pgn_game_record(li: lichess.Lichess, config: Configuration, game: model.Game, board: chess.Board,
@@ -1163,15 +1333,139 @@ def get_game_file_path(config: Configuration,
     """Return the path of the file where the game record will be written."""
     def create_valid_path(s: str) -> str:
         illegal = '<>:"/\\|?*'
-        return os.path.join(config.pgn_directory, "".join(c for c in s if c not in illegal))
+        valid = "".join(c for c in s if c not in illegal)
+        return os.path.join(config.pgn_directory, "_".join(valid.split()))
 
     if config.pgn_file_grouping == "game" or not game_is_over or force_single:
-        return create_valid_path(f"{white_name} vs {black_name} - {game_id}.pgn")
+        return create_valid_path(f"{white_name} vs {black_name} {game_id}.pgn")
     elif config.pgn_file_grouping == "opponent":
         opponent_name = white_name if user_name == black_name else black_name
         return create_valid_path(f"{user_name} games vs. {opponent_name}.pgn")
     else:  # config.pgn_file_grouping == "all"
         return create_valid_path(f"{user_name} games.pgn")
+
+
+def get_game_log_path(config: Configuration, game: model.Game) -> str | None:
+    if not config.pgn_directory:
+        return None
+
+    game_path = get_game_file_path(config, game.id, game.white.name, game.black.name, game.me.name,
+                                   is_game_over(game), force_single=True)
+    log_name = f"{os.path.splitext(os.path.basename(game_path))[0]}.log"
+    return os.path.join(config.pgn_directory, active_game_log_directory, log_name)
+
+
+def game_log_fragment_path(game_log_path: str) -> str:
+    """Return an unused path for a preserved partial game log."""
+    for index in itertools.count(1):
+        fragment_path = f"{game_log_path}.part{index}"
+        if not os.path.exists(fragment_path):
+            return fragment_path
+    raise RuntimeError("unreachable")
+
+
+def game_log_fragment_paths(game_log_path: str) -> list[str]:
+    """Return preserved partial game logs in replay order."""
+    fragments = glob.glob(f"{game_log_path}.part*")
+    return sorted(fragments, key=lambda path: int(path.rsplit(".part", 1)[1]))
+
+
+def preserve_existing_game_log(game_log_path: str) -> None:
+    """Keep an existing active log before a reconnect can reopen and truncate it."""
+    if not os.path.exists(game_log_path):
+        return
+
+    if os.path.getsize(game_log_path) == 0:
+        with contextlib.suppress(OSError):
+            os.remove(game_log_path)
+        return
+
+    fragment_path = game_log_fragment_path(game_log_path)
+    os.replace(game_log_path, fragment_path)
+    logger.info(f"Preserved partial game log at {fragment_path}")
+
+
+def merge_game_log_fragments(game_log_path: str) -> str | None:
+    """Merge preserved partial active logs with the current active log."""
+    fragments = game_log_fragment_paths(game_log_path)
+    current_log_exists = os.path.exists(game_log_path)
+    current_log_has_content = current_log_exists and os.path.getsize(game_log_path) > 0
+    parts = [*fragments]
+    if current_log_has_content:
+        parts.append(game_log_path)
+
+    if not parts:
+        return game_log_path if current_log_exists else None
+
+    merged_path = f"{game_log_path}.merged"
+    with open(merged_path, "wb") as merged:
+        for part in parts:
+            with open(part, "rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    merged.write(chunk)
+
+    for part in fragments:
+        with contextlib.suppress(OSError):
+            os.remove(part)
+    if current_log_exists:
+        with contextlib.suppress(OSError):
+            os.remove(game_log_path)
+
+    os.replace(merged_path, game_log_path)
+    return game_log_path
+
+
+def game_result_directory(game: model.Game) -> str | None:
+    """Return the result directory for a completed game from the bot's perspective."""
+    result = game.result()
+    if result == "1/2-1/2":
+        return "draw"
+    if result == "*":
+        return None
+    return "win" if (result == "1-0") == game.is_white else "loss"
+
+
+def move_game_log_to_result_directory(game_log_path: str | None, game: model.Game) -> str | None:
+    """Move a completed game log into logs/win, logs/draw, or logs/loss."""
+    if not game_log_path:
+        return None
+
+    result_directory = game_result_directory(game)
+    if result_directory is None:
+        return None
+
+    game_log_path = merge_game_log_fragments(game_log_path)
+    if not game_log_path or not os.path.exists(game_log_path):
+        return None
+    if os.path.getsize(game_log_path) == 0:
+        with contextlib.suppress(OSError):
+            os.remove(game_log_path)
+        logger.warning("Skipping empty game log; no engine search output was written.")
+        return None
+
+    source_directory = os.path.dirname(game_log_path)
+    if os.path.basename(source_directory) == active_game_log_directory:
+        log_directory = os.path.dirname(source_directory)
+    else:
+        log_directory = source_directory
+    target_directory = os.path.join(log_directory, result_directory)
+    target_path = os.path.join(target_directory, os.path.basename(game_log_path))
+    os.makedirs(target_directory, exist_ok=True)
+    os.replace(game_log_path, target_path)
+    remove_empty_top_level_game_log_duplicate(log_directory, target_path)
+    logger.info(f"Moved game log to {target_path}")
+    return target_path
+
+
+def remove_empty_top_level_game_log_duplicate(log_directory: str, target_path: str) -> None:
+    """Remove a stale empty logs/foo.log when logs/win/foo.log now holds the completed log."""
+    duplicate_path = os.path.join(log_directory, os.path.basename(target_path))
+    if duplicate_path == target_path:
+        return
+
+    with contextlib.suppress(OSError):
+        if os.path.isfile(duplicate_path) and os.path.getsize(duplicate_path) == 0:
+            os.remove(duplicate_path)
 
 
 def fill_missing_pgn_headers(game_record: chess.pgn.Game, game: model.Game) -> None:
@@ -1235,9 +1529,12 @@ def save_pgn_record(event: EventType, config: Configuration, user_name: str) -> 
     :param config: The user's bot configuration.
     :param user_name: The bot's name.
     """
+    if not config.save_pgn or not config.pgn_directory:
+        return
+
     pgn = event["game"]["pgn"]
     pgn_headers = chess.pgn.read_headers(io.StringIO(pgn))
-    if not config.pgn_directory or pgn_headers is None:
+    if pgn_headers is None:
         return
 
     game_id = event["game"]["id"]
@@ -1269,6 +1566,7 @@ def intro() -> str:
 
 
 auto_log_directory = "lichess_bot_auto_logs"
+active_game_log_directory = ".active"
 
 
 def log_python_and_libraries() -> None:
@@ -1282,7 +1580,7 @@ def log_python_and_libraries() -> None:
     logger.debug(text)
 
 
-def start_lichess_bot() -> None:
+def start_lichess_bot(check_active_games: bool = True) -> None:
     """Parse arguments passed to lichess-bot.py and starts lichess-bot."""
     parser = argparse.ArgumentParser(description="Play on Lichess with a bot")
     parser.add_argument("-u", action="store_true", help="Upgrade your account to a bot account.")
@@ -1290,6 +1588,10 @@ def start_lichess_bot() -> None:
     parser.add_argument("--config", help="Specify a configuration file (defaults to ./config.yml).")
     parser.add_argument("-l", "--logfile", help="Record all console output to a log file.", default=None)
     parser.add_argument("--disable_auto_logging", action="store_true", help="Disable automatic logging.")
+    parser.add_argument("--one-game", action="store_true", help="Play exactly one completed game and then exit cleanly.")
+    parser.add_argument("--challenge",
+                        metavar="USERNAME",
+                        help="Challenge one user once, then exit after that game or attempt.")
     args = parser.parse_args()
 
     logging_level = logging.DEBUG if args.v else logging.INFO
@@ -1319,7 +1621,24 @@ def start_lichess_bot() -> None:
         is_bot = upgrade_account(li)
 
     if is_bot:
-        start(li, user_profile, CONFIG, logging_level, args.logfile, args.disable_auto_logging)
+        if check_active_games:
+            active_games = li.get_ongoing_games()
+            if active_games is None:
+                logger.error("Could not check for active games. Refusing to start to avoid interfering with a running bot.")
+                return
+            if active_games:
+                game_ids = ", ".join(game["gameId"] for game in active_games)
+                logger.error(f"Already active Lichess game(s): {game_ids}. Refusing to start another bot instance.")
+                return
+
+        start(li,
+              user_profile,
+              CONFIG,
+              logging_level,
+              args.logfile,
+              args.disable_auto_logging,
+              args.one_game or bool(args.challenge),
+              args.challenge)
     else:
         logger.error(f"{username} is not a bot account. Please upgrade it to a bot account!")
     logging.shutdown()
@@ -1361,12 +1680,14 @@ def check_python_version() -> None:
 def start_program() -> None:
     """Start lichess-bot and restart when needed."""
     multiprocessing.set_start_method("spawn")
+    check_active_games = True
     try:
         while should_restart():
             disable_restart()
             # Restart on network errors.
             try:
-                start_lichess_bot()
+                start_lichess_bot(check_active_games)
+                check_active_games = False
             except RequestException:
                 stop.restart = True
                 logger.exception("Restarting lichess-bot due to a network error:")

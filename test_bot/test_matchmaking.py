@@ -1,5 +1,5 @@
 """Test functions for matchmaking module."""
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from lib.matchmaking import game_category, Matchmaking
 from lib.config import Configuration
 from lib.timer import Timer, seconds

@@ -34,6 +34,7 @@ def test_config_warn__false(caplog: pytest.LogCaptureFixture) -> None:
         assert caplog.records[0].levelname == "WARNING"
 
 
+
 def test_validate_config__empty_opponent_rating_difference() -> None:
     """Test that an empty matchmaking opponent_rating_difference does not crash the config validation."""
     with open("./config.yml.default") as file:
@@ -43,3 +44,5 @@ def test_validate_config__empty_opponent_rating_difference() -> None:
     CONFIG["matchmaking"]["opponent_rating_difference"] = None
     config.insert_default_values(CONFIG)
     config.validate_config(CONFIG)
+
+

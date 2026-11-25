@@ -57,6 +57,8 @@ class Challenge:
     def is_supported_time_control(self, challenge_cfg: Configuration) -> bool:
         """Check whether the time control is supported."""
         speeds = challenge_cfg.time_controls
+        if not self.rated and challenge_cfg.casual_time_controls is not None:
+            speeds = challenge_cfg.casual_time_controls
         increment_max: int = challenge_cfg.max_increment
         increment_min: int = challenge_cfg.min_increment
         base_max: int = challenge_cfg.max_base
@@ -89,6 +91,11 @@ class Challenge:
 
     def is_supported_rating(self, challenge_cfg: Configuration, user_profile: UserProfileType) -> bool:
         """Check whether the challenger's rating is within the acceptable range."""
+        if (not self.rated
+                and (challenge_cfg.ignore_casual_rating
+                     or (challenge_cfg.ignore_casual_human_rating and not self.challenger.is_bot))):
+            return True
+
         challenger_rating = self.challenger.rating
         if challenger_rating is None:
             return True
@@ -96,12 +103,16 @@ class Challenge:
         min_rating: int = challenge_cfg.min_rating
         max_rating: int = challenge_cfg.max_rating
         rating_diff: int | None = challenge_cfg.rating_difference
+        speed_diffs = challenge_cfg.rating_difference_by_speed
+        if speed_diffs and speed_diffs.lookup(self.speed) is not None:
+            rating_diff = speed_diffs.lookup(self.speed)
 
         if rating_diff is not None:
             bot_rating = user_profile.get("perfs", {}).get(self.perf_name.lower(), {}).get("rating")
             if bot_rating:
                 min_rating = max(min_rating, bot_rating - rating_diff)
-                max_rating = min(max_rating, bot_rating + rating_diff)
+                if not challenge_cfg.rating_difference_allow_higher:
+                    max_rating = min(max_rating, bot_rating + rating_diff)
 
         return min_rating <= challenger_rating <= max_rating
 

@@ -4,13 +4,15 @@ from lib import lichess
 from lib.timer import Timer, seconds
 from lib.lichess_types import GameType, PublicDataType, TOKEN_TESTS_TYPE, UserProfileType
 from collections import defaultdict
-from requests.exceptions import HTTPError
+from requests.exceptions import HTTPError, ReadTimeout
 from requests.models import Response
+import chess
+import chess.engine
 import logging
 import os
 import pytest
 from typing import cast
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 def mock_response(status_code: int, body: dict[str, object], headers: dict[str, str] | None = None) -> Response:
@@ -31,6 +33,16 @@ def lichess_without_init() -> lichess.Lichess:
     li = object.__new__(lichess.Lichess)
     li.rate_limit_timers = defaultdict(Timer)
     li.challenge_rate_limit_backoff = seconds(60)
+    return li
+
+
+def mock_lichess() -> lichess.Lichess:
+    """Create a Lichess client without making the token-test request."""
+    li = object.__new__(lichess.Lichess)
+    li.baseUrl = "https://lichess.org/"
+    li.logging_level = logging.DEBUG
+    li.rate_limit_timers = defaultdict(Timer)
+    li.session = Mock()
     return li
 
 
@@ -212,6 +224,42 @@ def test_failed_chat_message_does_not_raise() -> None:
     li.api_post = failing_api_post  # type: ignore[method-assign]
 
     li.chat("game_id", "player", "Good luck!")
+
+
+def test_move_submission_does_not_retry_ambiguous_timeout(caplog: pytest.LogCaptureFixture) -> None:
+    """A move timeout must return control to game-state recovery immediately."""
+    li = mock_lichess()
+    move = chess.engine.PlayResult(chess.Move.from_uci("e2e4"), None)
+
+    with (patch.object(li.session, "post", side_effect=ReadTimeout("move response timed out")) as post,
+          caplog.at_level(logging.WARNING),
+          pytest.raises(ReadTimeout)):
+        li.make_move("gameid", move)
+
+    post.assert_called_once()
+    assert "Move e2e4 for game gameid was not acknowledged (ReadTimeout)" in caplog.text
+
+
+def test_non_move_post_keeps_transient_retry() -> None:
+    """Removing move retries must not change retries for other API actions."""
+    li = mock_lichess()
+    response = Mock(status_code=200)
+    response.json.return_value = {}
+
+    with patch.object(li.session, "post", side_effect=[ReadTimeout("chat response timed out"), response]) as post:
+        assert li.api_post("chat", "gameid", data={"room": "player", "text": "hello"}) == {}
+
+    assert post.call_count == 2
+
+
+def test_game_pgn_requests_opening_tags() -> None:
+    """Ask Lichess to include ECO and opening-name headers in exported PGN."""
+    li = mock_lichess()
+
+    with patch.object(li, "api_get_raw", return_value="pgn") as get_raw:
+        assert li.get_game_pgn("gameid") == "pgn"
+
+    get_raw.assert_called_once_with("export", "gameid", params={"opening": "true"})
 
 
 def test_lichess() -> None:

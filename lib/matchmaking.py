@@ -30,7 +30,9 @@ class Matchmaking:
         self.matchmaking_cfg = config.matchmaking
         self.user_profile = user_profile
         self.last_challenge_created_delay = Timer(seconds(25))  # Challenges expire after 20 seconds.
-        self.last_game_ended_delay = Timer(minutes(self.matchmaking_cfg.challenge_timeout))
+        # Startup should be allowed to create the first challenge immediately.
+        # The post-game cooldown begins when `game_done()` resets this timer.
+        self.last_game_ended_delay = Timer()
         self.last_user_profile_update_time = Timer(minutes(5))
         self.min_wait_time = seconds(60)  # Wait before new challenge to avoid api rate limits.
         self.rate_limit_timer = Timer()
@@ -175,16 +177,10 @@ class Matchmaking:
                 weights = [1] * len(online_bots)
         return weights
 
-    def choose_opponent(self) -> tuple[str | None, int, int, int, str, str]:
-        """Choose an opponent."""
-        override_choice = random.choice(self.matchmaking_cfg.overrides.keys() + [None])
-        logger.info(f"Using the {override_choice or 'default'} matchmaking configuration.")
-        override = {} if override_choice is None else self.matchmaking_cfg.overrides.lookup(override_choice)
-        match_config = self.matchmaking_cfg | override
-
+    def choose_challenge_details(self, match_config: Configuration) -> tuple[int, int, int, str, str]:
+        """Choose variant, clock, and mode for a challenge."""
         variant = self.get_random_config_value(match_config, "challenge_variant", self.variants)
         mode = self.get_random_config_value(match_config, "challenge_mode", ["casual", "rated"])
-        rating_preference = match_config.rating_preference
 
         base_time = random.choice(match_config.challenge_initial_time)
         increment = random.choice(match_config.challenge_increment)
@@ -197,6 +193,17 @@ class Matchmaking:
         else:
             num_days = 0
 
+        return base_time, increment, num_days, variant, mode
+
+    def choose_opponent(self) -> tuple[str | None, int, int, int, str, str]:
+        """Choose an opponent."""
+        override_choice = random.choice(self.matchmaking_cfg.overrides.keys() + [None])
+        logger.info(f"Using the {override_choice or 'default'} matchmaking configuration.")
+        override = {} if override_choice is None else self.matchmaking_cfg.overrides.lookup(override_choice)
+        match_config = self.matchmaking_cfg | override
+
+        base_time, increment, num_days, variant, mode = self.choose_challenge_details(match_config)
+        rating_preference = match_config.rating_preference
         game_type = game_category(variant, base_time, increment, num_days)
 
         min_rating = match_config.opponent_min_rating
@@ -231,12 +238,20 @@ class Matchmaking:
         weights = self.get_weights(online_bots, rating_preference, min_rating, max_rating, game_type)
 
         try:
-            bot = random.choices(online_bots, weights=weights)[0]
-            bot_profile = self.li.get_public_data(bot["username"])
-            if bot_profile.get("blocking"):
-                self.add_to_block_list(bot["username"])
-            else:
-                bot_username = bot["username"]
+            while online_bots:
+                bot = random.choices(online_bots, weights=weights)[0]
+                bot_profile = self.li.get_public_data(bot["username"])
+                if bot_profile.get("blocking"):
+                    self.add_to_block_list(bot["username"])
+                else:
+                    bot_username = bot["username"]
+                    break
+
+                online_bots.remove(bot)
+                weights = self.get_weights(online_bots, rating_preference, min_rating, max_rating, game_type)
+
+            if not bot_username:
+                logger.error("No suitable bots found to challenge.")
         except Exception:
             if online_bots:
                 logger.exception("Error:")
@@ -244,6 +259,15 @@ class Matchmaking:
                 logger.error("No suitable bots found to challenge.")
 
         return bot_username, base_time, increment, num_days, variant, mode
+
+    def challenge_username(self, username: str) -> str:
+        """Create one explicit challenge to a named opponent."""
+        base_time, increment, days, variant, mode = self.choose_challenge_details(self.matchmaking_cfg)
+        logger.info(f"Will challenge {username} for a {variant} {mode} game.")
+        challenge_id = self.create_challenge(username, base_time, increment, days, variant, mode)
+        logger.info(f"Challenge id is {challenge_id or 'None'}.")
+        self.challenge_id = challenge_id
+        return challenge_id
 
     def get_random_config_value(self, config: Configuration, parameter: str, choices: list[str]) -> str:
         """Choose a random value from `choices` if the parameter value in the config is `random`."""
