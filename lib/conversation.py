@@ -14,11 +14,7 @@ from typing import TypeAlias
 MULTIPROCESSING_LIST_TYPE: TypeAlias = Sequence[model.Challenge]
 
 logger = logging.getLogger(__name__)
-STOCKFISH_BIO_LINE = re.compile(
-    r"[^\w]*(?:(?:I run|Running|Engine:)\s+)?Stockfish ([0-9]{1,3}(?:\.[0-9]{1,3}){0,2})"
-    r"(?: NNUE)?(?: \((?:Go )?Engine\))?\s*",
-    re.IGNORECASE,
-)
+STOCKFISH_BIO = re.compile(r"\bStockfish\b(?:\s+([0-9]{1,3}(?:\.[0-9]{1,3}){0,2})\b)?", re.IGNORECASE)
 
 
 class ChatLine:
@@ -176,15 +172,13 @@ class Conversation:
                                            self.no_engine_report_greeting, "")
 
     def lookup_stockfish_bio(self, result: Future[str]) -> None:
-        """Return a version from an explicit Stockfish engine line in the public bio."""
+        """Return "Stockfish" (with version, if given) when the public bio mentions Stockfish."""
         engine = ""
         try:
             profile = self.li.get_public_data(self.game.opponent.name).get("profile") or {}
             bio = profile.get("bio") or ""
-            for line in bio.splitlines():
-                if match := STOCKFISH_BIO_LINE.fullmatch(line):
-                    engine = f"Stockfish {match[1]}"
-                    break
+            if match := STOCKFISH_BIO.search(bio):
+                engine = f"Stockfish {match[1]}" if match[1] else "Stockfish"
         except (RequestException, OSError, ValueError) as exc:
             logger.debug("Could not read opponent bio for %s: %s", self.game.opponent.name, exc)
         finally:

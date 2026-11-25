@@ -1,4 +1,5 @@
 """Test chat reactions and greeting selection."""
+from concurrent.futures import Future
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
@@ -102,3 +103,17 @@ def test_genuine_engine_skips_name_query() -> None:
         call("game-id", "spectator", genuine),
     ]
     assert conversation.bio_wait is None
+
+
+@pytest.mark.parametrize(("bio", "expected"), [
+    ("Architect: @Emirus_A 🌠 (DM For Bot Membership 😎)\nCore Engine: Stockfish ✨", "Stockfish"),
+    ("I run Stockfish 17.1 NNUE", "Stockfish 17.1"),
+    ("Homemade engine written in Rust", ""),
+])
+def test_bio_lookup_detects_stockfish_anywhere(bio: str, expected: str) -> None:
+    """Any mention of Stockfish in the bio counts; the version is optional."""
+    conversation = make_conversation()
+    conversation.li.get_public_data.return_value = {"profile": {"bio": bio}}
+    result: Future[str] = Future()
+    conversation.lookup_stockfish_bio(result)
+    assert result.result() == expected
