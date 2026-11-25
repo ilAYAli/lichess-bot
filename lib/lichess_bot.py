@@ -74,7 +74,7 @@ logger = logging.getLogger(__name__)
 try:
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from notify_ntfy import maybe_notify_game, maybe_notify_game_start
+    from notify_mac import maybe_notify_game, maybe_notify_game_start
 except Exception:
     maybe_notify_game = None
     maybe_notify_game_start = None
