@@ -28,6 +28,16 @@ engine:                            # Engine settings.
     selection: "weighted_random"   # Move selection is one of "weighted_random", "uniform_random" or "best_move" (never below min_weight).
     max_depth: 20                  # How many moves from the start to take from the book.
     normalization: "none"          # Normalization method for the book weights. One of "none", "sum", or "max".
+#   lower_rated:                   # Book overrides used when my rating - opponent rating >= min_diff.
+#     min_diff: 150
+#     max_depth: 5
+#     selection: "weighted_random"
+#     normalization: "max"
+#     min_weight: 10
+# rating_based_options:            # UCI options set per game from the rating difference (me - opponent).
+#   Contempt:                      # The level with the highest min_diff not above the difference wins.
+#     - {min_diff: -10000, value: 0}
+#     - {min_diff: 150, value: 50}
 
   draw_or_resign:
     resign_enabled: false          # Whether or not the bot should resign.

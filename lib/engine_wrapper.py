@@ -68,6 +68,8 @@ def create_engine(engine_config: Configuration, game: model.Game | None = None) 
             raise ValueError(
                 f"    Invalid engine type: {engine_type}. Expected xboard, uci, or homemade.")
     options = remove_managed_options(cfg.lookup(f"{engine_type}_options") or Configuration({}))
+    if engine_type == "uci":
+        options |= rating_based_options(cfg.rating_based_options, game)
     logger.debug(f"Starting engine: {commands}")
     return Engine(commands, options, stderr, cfg.draw_or_resign, game, cfg.debug,
                   cwd=cfg.working_dir)
@@ -79,6 +81,45 @@ def remove_managed_options(config: Configuration) -> OPTIONS_GO_EGTB_TYPE:
         return chess.engine.Option(key, "", None, None, None, None).is_managed()
 
     return {name: value for (name, value) in config.items() if not is_managed(name)}
+
+
+def game_rating_diff(game: model.Game | None) -> int | None:
+    """Return my rating minus the opponent's rating, or None if either rating is unknown."""
+    if game is None or game.me.rating is None or game.opponent.rating is None:
+        return None
+    return game.me.rating - game.opponent.rating
+
+
+def rating_based_options(cfg: Configuration | None, game: model.Game | None) -> OPTIONS_GO_EGTB_TYPE:
+    """
+    Pick engine options from the rating difference (my rating minus the opponent's).
+
+    `cfg` maps an option name to a list of `{min_diff, value}` levels. The level with the highest
+    `min_diff` not above the rating difference wins. Nothing is set when either rating is unknown
+    or no level matches, so the engine keeps its default.
+    """
+    diff = game_rating_diff(game)
+    if not cfg or diff is None:
+        return {}
+
+    options: OPTIONS_GO_EGTB_TYPE = {}
+    for name, levels in cfg.items():
+        matching = [level for level in levels or [] if diff >= level["min_diff"]]
+        if matching:
+            value = max(matching, key=lambda level: level["min_diff"])["value"]
+            options[name] = value
+            logger.info(f"Setting {name}={value} for rating difference {diff:+d}.")
+    return options
+
+
+def polyglot_config_for_game(polyglot_cfg: Configuration, game: model.Game | None) -> Configuration:
+    """Use the `lower_rated` book settings when the opponent is far enough below my rating."""
+    lower_rated = polyglot_cfg.lower_rated
+    diff = game_rating_diff(game)
+    if not lower_rated or diff is None or diff < lower_rated.min_diff:
+        return polyglot_cfg
+    overrides = {key: value for key, value in lower_rated.items() if key != "min_diff"}
+    return Configuration(polyglot_cfg.config | overrides)
 
 
 PONDERPV_CHARACTERS = 6  # The length of ", Pv: ".
@@ -866,6 +907,7 @@ def get_book_move(board: chess.Board, game: model.Game,
                   polyglot_cfg: Configuration) -> chess.engine.PlayResult:
     """Get a move from an opening book."""
     no_book_move = chess.engine.PlayResult(None, None)
+    polyglot_cfg = polyglot_config_for_game(polyglot_cfg, game)
     use_book = polyglot_cfg.enabled
     max_game_length = polyglot_cfg.max_depth * 2 - 1
     if not use_book or len(board.move_stack) > max_game_length:

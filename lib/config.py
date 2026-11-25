@@ -213,6 +213,8 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     set_config_default(CONFIG, "engine", "polyglot", key="selection", default="weighted_random")
     set_config_default(CONFIG, "engine", "polyglot", key="min_weight", default=1)
     set_config_default(CONFIG, "engine", "polyglot", key="normalization", default="none")
+    set_config_default(CONFIG, "engine", "polyglot", key="lower_rated", default=None)
+    set_config_default(CONFIG, "engine", key="rating_based_options", default=None)
     set_config_default(CONFIG, "challenge", key="concurrency", default=1)
     set_config_default(CONFIG, "challenge", key="games_reserved_for_humans", default=0)
     set_config_default(CONFIG, "challenge", key="sort_by", default="best")
@@ -303,6 +305,25 @@ def log_config(CONFIG: CONFIG_DICT_TYPE, alternate_log_function: Callable[[str],
     destination = alternate_log_function or logger.debug
     destination(f"Config:\n{yaml.dump(logger_config, sort_keys=False)}")
     destination("====================")
+
+
+def validate_rating_based_config(CONFIG: CONFIG_DICT_TYPE, polyglot_selections: list[str]) -> None:
+    """Check `engine:polyglot:lower_rated` and `engine:rating_based_options`."""
+    polyglot_section = CONFIG["engine"].get("polyglot") or {}
+    lower_rated = polyglot_section.get("lower_rated")
+    if lower_rated:
+        config_assert(isinstance(lower_rated.get("min_diff"), int),
+                      "`engine:polyglot:lower_rated:min_diff` must be an integer.")
+        config_assert(lower_rated.get("selection", polyglot_section.get("selection")) in polyglot_selections,
+                      f"`engine:polyglot:lower_rated:selection` must be one of {polyglot_selections}.")
+        config_assert(lower_rated.get("normalization", "none") in ["none", "max", "sum"],
+                      "`engine:polyglot:lower_rated:normalization` must be one of ['none', 'max', 'sum'].")
+
+    for name, levels in (CONFIG["engine"].get("rating_based_options") or {}).items():
+        config_assert(isinstance(levels, list) and all(isinstance(level, dict)
+                                                       and isinstance(level.get("min_diff"), int)
+                                                       and "value" in level for level in levels),
+                      f"`engine:rating_based_options:{name}` must be a list of {{min_diff: <int>, value: <value>}}.")
 
 
 def validate_config(CONFIG: CONFIG_DICT_TYPE) -> None:
@@ -433,6 +454,8 @@ def validate_config(CONFIG: CONFIG_DICT_TYPE) -> None:
     config_assert(polyglot_section.get("normalization") in ["none", "max", "sum"],
                   f"`{polyglot_section.get('normalization')}` is not a valid choice for "
                   f"`engine:polyglot:normalization`. Please choose from ['none', 'max', 'sum'].")
+
+    validate_rating_based_config(CONFIG, selection_choices["polyglot"])
 
     lichess_tbs_config = CONFIG["engine"].get("lichess_bot_tbs") or {}
     quality_selections = ["best", "suggest"]
