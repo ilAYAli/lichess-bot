@@ -829,6 +829,9 @@ def play_game(li: lichess.Lichess,
             hello_other_engine = get_greeting("hello_other_engine", config.greeting, keyword_map)
             hello_no_engine_report = get_greeting("hello_no_engine_report", config.greeting, keyword_map)
             hello_stockfish_bio = get_greeting("hello_stockfish_bio", config.greeting, keyword_map)
+            genuine_engines = {name.casefold() for name in config.greeting.genuine_engines}
+            hello_genuine_engine = (get_greeting("hello_genuine_engine", config.greeting, keyword_map)
+                                    if game.opponent.name.casefold() in genuine_engines else "")
             keyword_map.pop("engine_info")
             goodbye = get_greeting("goodbye", config.greeting, keyword_map)
             hello_spectators = get_greeting("hello_spectators", config.greeting, keyword_map)
@@ -845,7 +848,7 @@ def play_game(li: lichess.Lichess,
             say_hello(conversation, hello, hello_spectators, board, hello_stockfish,
                       hello_stockfish_spectators, build_greeting, hello_other_engine=hello_other_engine,
                       hello_stockfish_bio=hello_stockfish_bio,
-                      hello_no_engine_report=hello_no_engine_report)
+                      hello_no_engine_report=hello_no_engine_report, hello_genuine_engine=hello_genuine_engine)
             while stay_in_game and (not stop.terminated or quit_after_all_games_finish) and not stop.force_quit:
                 move_attempted = False
                 try:
@@ -1068,12 +1071,12 @@ def say_hello(conversation: Conversation,
               hello_stockfish: str = "",
               hello_stockfish_spectators: str = "",
               build_greeting: str = "", *, hello_other_engine: str = "", hello_stockfish_bio: str = "",
-              hello_no_engine_report: str = "") -> None:
+              hello_no_engine_report: str = "", hello_genuine_engine: str = "") -> None:
     """Send the greetings to the chat rooms."""
     conversation.start_greeting(hello, hello_spectators, hello_stockfish,
                                 hello_stockfish_spectators, build_greeting,
                                 other_engine=hello_other_engine, stockfish_bio=hello_stockfish_bio,
-                                no_engine_report=hello_no_engine_report,
+                                no_engine_report=hello_no_engine_report, genuine_engine=hello_genuine_engine,
                                 announce=len(board.move_stack) < 2)
 
 

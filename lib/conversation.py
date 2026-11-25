@@ -121,7 +121,7 @@ class Conversation:
     def start_greeting(self, player: str, spectator: str,
                        stockfish: str = "", stockfish_spectator: str = "",
                        build_greeting: str = "", *, other_engine: str = "", stockfish_bio: str = "",
-                       no_engine_report: str = "", announce: bool = True) -> None:
+                       no_engine_report: str = "", genuine_engine: str = "", announce: bool = True) -> None:
         """Set up the follow-up and send the opening chat for a new game."""
         if self.greeting_started:
             return
@@ -138,6 +138,13 @@ class Conversation:
         if not self.game.opponent.is_bot:
             self.send_message("player", player)
             self.send_message("spectator", spectator)
+            return
+
+        if genuine_engine:
+            # Whitelisted bot: skip the !name query and bio check, which it doesn't support.
+            self.send_message("player", build_greeting)
+            self.send_message("spectator", build_greeting)
+            self.send_engine_follow_up(genuine_engine, genuine_engine, "")
             return
 
         self.ask_opponent_name()

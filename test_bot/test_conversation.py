@@ -86,3 +86,19 @@ def test_unresponsive_bot_gets_no_engine_specific_follow_up() -> None:
     ]
 
 
+
+
+def test_genuine_engine_skips_name_query() -> None:
+    """Whitelisted bots get the genuine-engine follow-up without a !name query or bio check."""
+    conversation = make_conversation()
+    genuine = "Not Stockfish this time. Apparently my opponent is running a genuine engine."
+    conversation.start_greeting(PLAYER_GREETING, SPECTATOR_GREETING, build_greeting="I am Enyo",
+                                no_engine_report="no report", genuine_engine=genuine)
+
+    assert conversation.li.chat.call_args_list == [
+        call("game-id", "player", "I am Enyo"),
+        call("game-id", "spectator", "I am Enyo"),
+        call("game-id", "player", genuine),
+        call("game-id", "spectator", genuine),
+    ]
+    assert conversation.bio_wait is None
