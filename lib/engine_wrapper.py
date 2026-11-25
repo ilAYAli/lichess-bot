@@ -323,7 +323,15 @@ class EngineWrapper:
             acceptable_rating = (rating_diff is not None
                                  and (accept_draw_min_rating_diff is None
                                       or rating_diff >= accept_draw_min_rating_diff))
-            if enough_scores and enough_pieces_for_accept and acceptable_rating:
+            accept_draw_score = self.draw_or_resign.accept_draw_score
+            dead_equal = (enough_scores and enough_pieces_for_accept
+                          and all(abs(actual(score)) <= accept_draw_score
+                                  for score in self.scores[-accept_draw_moves:]))
+            if dead_equal:
+                result.draw_offered = True
+                logger.info(f"Accepting draw offer: score within +/-{accept_draw_score}cp "
+                            f"for {accept_draw_moves} moves.")
+            elif enough_scores and enough_pieces_for_accept and acceptable_rating:
                 scores = self.scores[-accept_draw_moves:]
                 accept_score_threshold = 0
                 if rating_diff is not None and rating_diff < 0:

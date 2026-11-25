@@ -142,3 +142,28 @@ def test_disabled_heuristic_draw_offers_do_not_claim_repetition() -> None:
     engine.offer_draw_or_resign(result, board)
 
     assert not result.draw_offered
+
+
+def accept_draw_engine(scores_cp: list[int], my_rating: int, opponent_rating: int) -> EngineWrapper:
+    engine = EngineWrapper({}, draw_or_resign_config(offer_draw_enabled=False, accept_draw_enabled=True,
+                                                     accept_draw_score=10, accept_draw_moves=5,
+                                                     accept_draw_pieces=32, accept_draw_min_rating_diff=100))
+    engine.scores = [chess.engine.PovScore(chess.engine.Cp(cp), chess.WHITE) for cp in scores_cp]
+    engine.game = Mock(me=Mock(rating=my_rating), opponent=Mock(rating=opponent_rating))
+    return engine
+
+
+def test_accepts_offered_draw_in_dead_equal_position_against_equal_opponent() -> None:
+    engine = accept_draw_engine([9, -3, 0, 5, 9], my_rating=2962, opponent_rating=2966)
+    result = chess.engine.PlayResult(chess.Move.from_uci("e2e4"), None, {})
+    with patch("lib.engine_wrapper.check_for_draw_offer", return_value=True):
+        engine.offer_draw_or_resign(result, chess.Board())
+    assert result.draw_offered
+
+
+def test_declines_offered_draw_when_slightly_better_against_equal_opponent() -> None:
+    engine = accept_draw_engine([9, 12, 15, 20, 30], my_rating=2962, opponent_rating=2966)
+    result = chess.engine.PlayResult(chess.Move.from_uci("e2e4"), None, {})
+    with patch("lib.engine_wrapper.check_for_draw_offer", return_value=True):
+        engine.offer_draw_or_resign(result, chess.Board())
+    assert not result.draw_offered
