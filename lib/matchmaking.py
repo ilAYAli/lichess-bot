@@ -16,6 +16,8 @@ from lib.lichess_types import UserProfileType, PerfType, EventType, FilterType, 
 MULTIPROCESSING_LIST_TYPE: TypeAlias = Sequence[model.Challenge]
 
 logger = logging.getLogger(__name__)
+
+
 forever = years(1000)
 
 class Matchmaking:
@@ -336,8 +338,8 @@ class Matchmaking:
             time_to_next_challenge = self.min_wait_time - self.last_challenge_created_delay.time_since_reset()
             rate_limit_delay = self.rate_limit_timer.time_until_expiration()
             time_left = max(postgame_timeout, time_to_next_challenge, rate_limit_delay)
-            earliest_challenge_time = datetime.datetime.now().astimezone() + time_left
-            logger.info(f"Next challenge attempt after {earliest_challenge_time.strftime('%c %Z')}")
+            earliest_challenge_time = datetime.datetime.now() + time_left
+            logger.info(f"Next challenge will be created after {earliest_challenge_time.strftime('%c')}")
 
     def add_to_block_list(self, username: str) -> None:
         """Add a bot to the blocklist."""
@@ -345,8 +347,7 @@ class Matchmaking:
 
     def in_block_list(self, username: str) -> bool:
         """Check if an opponent is in the block list to prevent future challenges."""
-        return ((not self.should_accept_challenge(username, ""))
-                or username in self.online_block_list)
+        return (not self.should_accept_challenge(username, "")) or username in self.online_block_list
 
     def add_challenge_filter(self,
                              username: str,

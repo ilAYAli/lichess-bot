@@ -6,6 +6,8 @@ from lib.lichess_types import GameType, PublicDataType, TOKEN_TESTS_TYPE, UserPr
 from collections import defaultdict
 from requests.exceptions import HTTPError, ReadTimeout
 from requests.models import Response
+import chess
+import chess.engine
 import logging
 import os
 import pytest

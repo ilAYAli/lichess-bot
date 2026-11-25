@@ -199,7 +199,7 @@ class Lichess:
 
         if is_new_rate_limit(response):
             delay = seconds(1 if endpoint_name == "move" else 60)
-            self.set_rate_limit_delay(path_template, delay, "default cooldown")
+            self.set_rate_limit_delay(path_template, delay)
 
         response.raise_for_status()
         response.encoding = "utf-8"
@@ -265,7 +265,7 @@ class Lichess:
             return self.handle_challenge(response)
 
         if is_new_rate_limit(response):
-            self.set_rate_limit_delay(path_template, seconds(60), "default cooldown")
+            self.set_rate_limit_delay(path_template, seconds(60))
 
         if raise_for_status:
             response.raise_for_status()
@@ -294,10 +294,16 @@ class Lichess:
                  payload: REQUESTS_PAYLOAD_TYPE | None = None,
                  raise_for_status: bool = True) -> ChallengeType | TOKEN_TESTS_TYPE | None:
         """
-        Send a POST to lichess.org, retrying transient failures.
+        Send a POST to lichess.org.
 
-        Move submissions bypass this retry wrapper because their outcome must be
-        reconciled with the live game state before another request is sent.
+        :param endpoint_name: The name of the endpoint.
+        :param template_args: The values that go in the url (e.g. the challenge id if `endpoint_name` is `accept`).
+        :param data: Data sent to lichess.org.
+        :param headers: The headers for the request.
+        :param params: Parameters sent to lichess.org.
+        :param payload: Payload sent to lichess.org.
+        :param raise_for_status: Whether to raise an exception if the response contains an error code.
+        :return: lichess.org's response in a dict.
         """
         logging.getLogger("backoff").setLevel(self.logging_level)
         return self._api_post_once(endpoint_name,
@@ -330,7 +336,7 @@ class Lichess:
         if bot_is_rate_limited or opponent_is_rate_limited:
             delay = cast(datetime.timedelta, get_challenge_timeout(challenge_response))
             if bot_is_rate_limited:
-                self.set_rate_limit_delay(ENDPOINTS["challenge"], delay, "Lichess ratelimit.seconds")
+                self.set_rate_limit_delay(ENDPOINTS["challenge"], delay)
             challenge_response["bot_is_rate_limited"] = bot_is_rate_limited
             challenge_response["opponent_is_rate_limited"] = opponent_is_rate_limited
             challenge_response["rate_limit_timeout"] = delay
@@ -349,7 +355,7 @@ class Lichess:
             if delay is None:
                 delay = self.challenge_rate_limit_backoff
                 self.challenge_rate_limit_backoff = min(seconds(600), self.challenge_rate_limit_backoff * 2)
-            self.set_rate_limit_delay(ENDPOINTS["challenge"], delay, "local exponential backoff")
+            self.set_rate_limit_delay(ENDPOINTS["challenge"], delay)
             challenge_response["bot_is_rate_limited"] = True
             challenge_response["opponent_is_rate_limited"] = False
             challenge_response["rate_limit_timeout"] = delay
@@ -359,20 +365,14 @@ class Lichess:
 
         return challenge_response
 
-    def set_rate_limit_delay(self, path_template: str, delay_time: datetime.timedelta,
-                             delay_source: str = "default cooldown") -> None:
+    def set_rate_limit_delay(self, path_template: str, delay_time: datetime.timedelta) -> None:
         """
         Set a delay to a path template if it was rate limited.
 
         :param path_template: The path template.
         :param delay_time: How long we won't call this endpoint.
-        :param delay_source: Where the delay came from.
         """
-        expires_at = datetime.datetime.now().astimezone() + delay_time
-        logger.warning(
-            f"Endpoint {path_template} is rate limited. Waiting {sec_str(delay_time)} seconds "
-            f"({delay_source}) until next request attempt after {expires_at.strftime('%c %Z')}."
-        )
+        logger.warning(f"Endpoint {path_template} is rate limited. Waiting {sec_str(delay_time)} seconds until next request.")
         self.rate_limit_timers[path_template] = Timer(delay_time)
 
     def is_rate_limited(self, path_template: str) -> bool:

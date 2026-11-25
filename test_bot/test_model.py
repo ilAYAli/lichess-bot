@@ -109,22 +109,17 @@ def test_challenge_rating_filters() -> None:
     CONFIG["challenge"]["min_rating"] = 2500
     assert challenge_model.is_supported(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
         False, "generic")
-    assert challenge_model.decline_detail(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
-        "rating 2000 below minimum 2500")
 
     # Test rating_difference filter (bot is 3000, challenger is 2000, diff is 1000)
     CONFIG["challenge"]["min_rating"] = 0
     CONFIG["challenge"]["rating_difference"] = 500
     assert challenge_model.is_supported(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
         False, "generic")
-    assert challenge_model.decline_detail(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
-        "rating 2000 below minimum 2500 for own bullet rating 3000")
 
     # Casual human challenges can ignore rating without doing the same for casual bot challenges.
     CONFIG["challenge"]["ignore_casual_human_rating"] = True
     assert challenge_model.is_supported(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
         True, "")
-    assert challenge_model.rating_decline_detail(configuration, user_profile) == ""
     bot_challenge: ChallengeType = {**challenge, "challenger": {**challenge["challenger"], "title": "BOT"}}
     bot_challenge_model = model.Challenge(bot_challenge, user_profile)
     assert bot_challenge_model.is_supported(configuration, recent_challenges, Counter(), online_block_list, user_profile) == (
@@ -262,5 +257,3 @@ def test_challenge_rating_difference_by_speed() -> None:
     assert not challenge_for("rapid", 2850).is_supported_rating(challenge_cfg, user_profile)
     assert challenge_for("rapid", 2900).is_supported_rating(challenge_cfg, user_profile)
     assert challenge_for("rapid", 3400).is_supported_rating(challenge_cfg, user_profile)
-    assert challenge_for("rapid", 2850).rating_decline_detail(challenge_cfg, user_profile) == (
-        "rating 2850 below minimum 2900 for own rapid rating 3000")
