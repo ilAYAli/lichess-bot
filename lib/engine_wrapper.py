@@ -892,7 +892,10 @@ def get_book_move(board: chess.Board, game: model.Game,
 
                 match selection:
                     case "weighted_random":
-                        move = reader.weighted_choice(board).move
+                        entries = [entry for entry in reader.find_all(board) if entry.weight >= min_weight]
+                        if not entries:
+                            raise IndexError
+                        move = random.choices(entries, weights=[entry.weight for entry in entries])[0].move
                     case "uniform_random":
                         move = reader.choice(board, minimum_weight=min_weight).move
                     case "best_move":
