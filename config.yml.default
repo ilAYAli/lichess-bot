@@ -207,7 +207,8 @@ greeting:
   # Optional follow-up when a bot's !name reply identifies Stockfish.
   hello_stockfish: "Sigh, another rebranded Stockfish. (-_-)"
   hello_stockfish_spectators: "Sigh, another rebranded Stockfish. (-_-)"
-  hello_other_engine: "" # Optional follow-up in both rooms for other engines reported via !name
+  hello_other_engine: "" # Optional follow-up in both rooms for non-Stockfish engines reported via !name
+  hello_no_engine_report: "" # Optional follow-up when a bot does not reply to !name within 10 seconds
   hello_stockfish_bio: "" # Optional follow-up in both rooms for an explicit Stockfish version in the bot's bio
   goodbye: "Good game!" # Message to send to opponent chat at the end of a game
   hello_spectators: "Hi! I'm {me}. Type !help for a list of commands I can respond to." # Message to send to spectator chat at the start of a game

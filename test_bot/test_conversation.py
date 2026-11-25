@@ -57,18 +57,18 @@ def test_stockfish_greeting_requires_opponent_name_reply(room: str) -> None:
 
 
 def test_non_stockfish_name_reply_uses_configured_follow_up() -> None:
-    """Use the reported engine name and version in the optional follow-up."""
+    """Use the reported engine name for the optional non-Stockfish follow-up."""
     conversation = make_conversation()
     conversation.start_greeting(PLAYER_GREETING, SPECTATOR_GREETING,
-                                other_engine="Finally, not Stockfish! My opponent reports running {engine_info}.")
+                                other_engine="Not Stockfish this time—but apparently my opponent is running {engine_info}.")
 
     reply = ChatLine({"room": "player", "username": "OtherBot",
-                      "text": "OtherBot running Ursus 1.1.0-dev-3db301f avx2 (lichess-bot v2026.6.28.2)"})
+                      "text": "OtherBot running Black Marlin 7.0 (lichess-bot v2026.6.28.2)"})
     conversation.react(reply)
     conversation.react(reply)
-    assert conversation.opponent_engine_type == "Ursus 1.1.0-dev-3db301f avx2"
+    assert conversation.opponent_engine_type == "Black Marlin 7.0"
 
-    expected = "Finally, not Stockfish! My opponent reports running Ursus 1.1.0-dev-3db301f."
+    expected = "Not Stockfish this time—but apparently my opponent is running Black Marlin 7.0."
     assert conversation.li.chat.call_args_list == [
         call("game-id", "player", "!name"),
         call("game-id", "player", expected),

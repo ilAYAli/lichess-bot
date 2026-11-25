@@ -58,6 +58,7 @@ class Conversation:
         self.stockfish_greeting = ""
         self.stockfish_spectator_greeting = ""
         self.other_engine_greeting = ""
+        self.no_engine_report_greeting = ""
         self.stockfish_bio_greeting = ""
         self.bio_wait: Timer | None = None
         self.bio_lookup: Future[str] | None = None
@@ -120,7 +121,7 @@ class Conversation:
     def start_greeting(self, player: str, spectator: str,
                        stockfish: str = "", stockfish_spectator: str = "",
                        build_greeting: str = "", *, other_engine: str = "", stockfish_bio: str = "",
-                       announce: bool = True) -> None:
+                       no_engine_report: str = "", announce: bool = True) -> None:
         """Set up the follow-up and send the opening chat for a new game."""
         if self.greeting_started:
             return
@@ -129,6 +130,7 @@ class Conversation:
         self.stockfish_greeting = stockfish
         self.stockfish_spectator_greeting = stockfish_spectator or stockfish
         self.other_engine_greeting = other_engine
+        self.no_engine_report_greeting = no_engine_report
         self.stockfish_bio_greeting = stockfish_bio
 
         if not announce:
@@ -141,7 +143,7 @@ class Conversation:
         self.ask_opponent_name()
         self.send_message("player", build_greeting)
         self.send_message("spectator", build_greeting)
-        if self.stockfish_bio_greeting:
+        if self.stockfish_bio_greeting or self.no_engine_report_greeting:
             self.bio_wait = Timer(seconds(10))
 
     def check_bio_fallback(self) -> None:
@@ -150,14 +152,21 @@ class Conversation:
             return
         if self.bio_wait is not None and self.bio_wait.is_expired():
             self.bio_wait = None
-            self.bio_lookup = Future()
-            Thread(target=self.lookup_stockfish_bio, args=(self.bio_lookup,), daemon=True).start()
+            if self.stockfish_bio_greeting:
+                self.bio_lookup = Future()
+                Thread(target=self.lookup_stockfish_bio, args=(self.bio_lookup,), daemon=True).start()
+            elif self.no_engine_report_greeting:
+                self.send_engine_follow_up(self.no_engine_report_greeting,
+                                           self.no_engine_report_greeting, "")
         if self.bio_lookup is not None and self.bio_lookup.done():
             engine = self.bio_lookup.result()
             self.bio_lookup = None
             if engine:
                 logger.info("Opponent %s lists %s in its bio", self.game.opponent.name, engine)
                 self.send_engine_follow_up(self.stockfish_bio_greeting, self.stockfish_bio_greeting, engine)
+            elif self.no_engine_report_greeting:
+                self.send_engine_follow_up(self.no_engine_report_greeting,
+                                           self.no_engine_report_greeting, "")
 
     def lookup_stockfish_bio(self, result: Future[str]) -> None:
         """Return a version from an explicit Stockfish engine line in the public bio."""

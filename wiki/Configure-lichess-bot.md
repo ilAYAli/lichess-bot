@@ -220,13 +220,14 @@ will precede the `go` command to start thinking with `sd 5`. The other `go_comma
   - `rating_difference_allow_higher`: If `rating_difference` is set, allow challengers above the bot's rating + `rating_difference`. The default is `false`.
 
 ## Greeting
-- `greeting`: Send messages via chat to the bot's opponent. The strings `{me}` and `{opponent}` are replaced by the bot's and opponent's Lichess usernames. `{build_info}` is replaced by the engine's UCI name, including its network when reported. `{engine_info}` is replaced by the Stockfish version/build reported by the opponent's `!name` reply, when available. Other unknown placeholders are removed. If you want to put a curly bracket in the message, use two: `{{` or `}}`.
+- `greeting`: Send messages via chat to the bot's opponent. The strings `{me}` and `{opponent}` are replaced by the bot's and opponent's Lichess usernames. `{build_info}` is replaced by the engine's UCI name, including its network when reported. `{engine_info}` is replaced by the reported engine name and version when available. Other unknown placeholders are removed. If you want to put a curly bracket in the message, use two: `{{` or `}}`.
   - `hello`: Message to send to the opponent when the bot makes its first move.
   - `goodbye`: Message to send to the opponent once the game is over.
   - `hello_spectators`: Message to send to the spectators when the bot makes its first move.
   - `goodbye_spectators`: Message to send to the spectators once the game is over.
   - `hello_stockfish` and `hello_stockfish_spectators`: Optional follow-up messages sent only when a bot's `!name` reply contains `Stockfish`, ignoring case. A bot's ordinary greeting is not used to identify its engine.
-  - `hello_other_engine`: Optional follow-up in both rooms when a bot's `!name` reply identifies another engine. Use `{engine_info}` for the reported engine name and version.
+  - `hello_other_engine`: Optional follow-up in both rooms when a bot's `!name` reply reports an engine other than Stockfish. Use `{engine_info}` for the reported engine name and version.
+  - `hello_no_engine_report`: Optional follow-up in both rooms when a bot does not reply to `!name` within 10 seconds. If `hello_stockfish_bio` is configured, the bio check runs first and this message is sent only if no Stockfish version is found.
   - `hello_stockfish_bio`: Optional follow-up in both rooms when no engine has been reported after 10 seconds and a line in the bot's bio explicitly lists a Stockfish version. Use `{engine_info}` for the engine and version listed in the bio.
 ```yml
   greeting:
