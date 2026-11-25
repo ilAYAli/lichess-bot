@@ -95,6 +95,9 @@ class Challenge:
         min_rating: int = challenge_cfg.min_rating
         max_rating: int = challenge_cfg.max_rating
         rating_diff: int | None = challenge_cfg.rating_difference
+        speed_diffs = challenge_cfg.rating_difference_by_speed
+        if speed_diffs and speed_diffs.lookup(self.speed) is not None:
+            rating_diff = speed_diffs.lookup(self.speed)
         bot_rating = None
 
         if rating_diff is not None:

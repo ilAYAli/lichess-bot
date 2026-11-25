@@ -234,3 +234,33 @@ def test_is_chess_960() -> None:
         expected = item["is_960"]
         result = model.is_chess_960(fen)
         assert result == expected
+
+
+def test_challenge_rating_difference_by_speed() -> None:
+    """A per-speed rating_difference overrides the global one for that speed only."""
+    user_profile: UserProfileType = {"id": "b", "username": "b", "title": "BOT",
+                                     "perfs": {"bullet": {"games": 100, "rating": 3000, "rd": 50, "prog": 0},
+                                               "rapid": {"games": 100, "rating": 3000, "rd": 50, "prog": 0}}}
+
+    def challenge_for(speed: str, rating: int) -> model.Challenge:
+        challenge: ChallengeType = {"id": "zzzzzzzz", "url": "https://lichess.org/zzzzzzzz", "status": "created",
+                                    "challenger": {"id": "c", "name": "c", "rating": rating, "title": "BOT", "online": True},
+                                    "destUser": {"id": "b", "name": "b", "rating": 3000, "title": "BOT", "online": True},
+                                    "variant": {"key": "standard", "name": "Standard", "short": "Std"}, "rated": True,
+                                    "speed": speed,
+                                    "timeControl": {"type": "clock", "limit": 600, "increment": 5, "show": "10+5"},
+                                    "color": "random", "finalColor": "white",
+                                    "perf": {"icon": "", "name": speed.capitalize()}}
+        return model.Challenge(challenge, user_profile)
+
+    challenge_cfg = config.Configuration({"min_rating": 0, "max_rating": 4000, "rating_difference": 300,
+                                          "rating_difference_allow_higher": True,
+                                          "rating_difference_by_speed": {"rapid": 100},
+                                          "ignore_casual_rating": False, "ignore_casual_human_rating": False})
+
+    assert challenge_for("bullet", 2750).is_supported_rating(challenge_cfg, user_profile)
+    assert not challenge_for("rapid", 2850).is_supported_rating(challenge_cfg, user_profile)
+    assert challenge_for("rapid", 2900).is_supported_rating(challenge_cfg, user_profile)
+    assert challenge_for("rapid", 3400).is_supported_rating(challenge_cfg, user_profile)
+    assert challenge_for("rapid", 2850).rating_decline_detail(challenge_cfg, user_profile) == (
+        "rating 2850 below minimum 2900 for own rapid rating 3000")

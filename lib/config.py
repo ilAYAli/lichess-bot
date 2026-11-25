@@ -237,6 +237,7 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     set_config_default(CONFIG, "challenge", key="max_rating", default=4000, force_empty_values=True)
     set_config_default(CONFIG, "challenge", key="rating_difference", default=None)
     set_config_default(CONFIG, "challenge", key="rating_difference_allow_higher", default=False)
+    set_config_default(CONFIG, "challenge", key="rating_difference_by_speed", default=None)
     set_config_default(CONFIG, "challenge", key="ignore_casual_rating", default=False)
     set_config_default(CONFIG, "challenge", key="ignore_casual_human_rating", default=False)
     set_config_default(CONFIG, "challenge", key="max_simultaneous_games_per_user", default=5)
@@ -381,6 +382,9 @@ def validate_config(CONFIG: CONFIG_DICT_TYPE) -> None:
 
     config_warn(CONFIG["challenge"]["min_rating"] <= CONFIG["challenge"]["max_rating"],
                 "challenge.max_rating < challenge.min_rating will result in no challenges being accepted.")
+    for speed, diff in (CONFIG["challenge"].get("rating_difference_by_speed") or {}).items():
+        config_assert(isinstance(diff, int) and diff >= 0,
+                      f"`challenge:rating_difference_by_speed:{speed}` must be a non-negative integer.")
     config_warn(CONFIG["challenge"].get("rating_difference") is None
                 or CONFIG["challenge"].get("rating_difference") >= 0,
                 "challenge.rating_difference < 0 will result in no challenges being accepted.")
