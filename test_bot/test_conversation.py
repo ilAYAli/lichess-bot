@@ -105,6 +105,18 @@ def test_genuine_engine_skips_name_query() -> None:
     assert conversation.bio_wait is None
 
 
+def test_genuine_engine_fills_engine_info_with_opponent_name() -> None:
+    """The genuine-engine follow-up substitutes {engine_info} with the opponent's name."""
+    conversation = make_conversation()
+    conversation.start_greeting(PLAYER_GREETING, SPECTATOR_GREETING, build_greeting="I am Enyo",
+                                genuine_engine="Not Stockfish, but '{engine_info}'.")
+
+    assert conversation.li.chat.call_args_list[-2:] == [
+        call("game-id", "player", "Not Stockfish, but 'OtherBot'."),
+        call("game-id", "spectator", "Not Stockfish, but 'OtherBot'."),
+    ]
+
+
 @pytest.mark.parametrize(("bio", "expected"), [
     ("Architect: @Emirus_A 🌠 (DM For Bot Membership 😎)\nCore Engine: Stockfish ✨", "Stockfish"),
     ("I run Stockfish 17.1 NNUE", "Stockfish 17.1"),

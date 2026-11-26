@@ -140,7 +140,7 @@ class Conversation:
             # Whitelisted bot: skip the !name query and bio check, which it doesn't support.
             self.send_message("player", build_greeting)
             self.send_message("spectator", build_greeting)
-            self.send_engine_follow_up(genuine_engine, genuine_engine, "")
+            self.send_engine_follow_up(genuine_engine, genuine_engine, self.game.opponent.name)
             return
 
         self.ask_opponent_name()
