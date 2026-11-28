@@ -285,6 +285,7 @@ def insert_default_values(CONFIG: CONFIG_DICT_TYPE) -> None:
     set_config_default(CONFIG, "greeting", key="hello_no_engine_report", default="", force_empty_values=True)
     set_config_default(CONFIG, "greeting", key="hello_stockfish_bio", default="", force_empty_values=True)
     set_config_default(CONFIG, "greeting", key="hello_genuine_engine", default="", force_empty_values=True)
+    set_config_default(CONFIG, "greeting", key="not_stockfish", default="", force_empty_values=True)
     set_config_default(CONFIG, "greeting", key="genuine_engines", default=[], force_empty_values=True)
 
 

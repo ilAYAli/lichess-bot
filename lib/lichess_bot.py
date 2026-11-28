@@ -833,6 +833,7 @@ def play_game(li: lichess.Lichess,
             hello_genuine_engine = (get_greeting("hello_genuine_engine", config.greeting, keyword_map)
                                     if game.opponent.name.casefold() in genuine_engines else "")
             keyword_map.pop("engine_info")
+            conversation.not_stockfish_reply = get_greeting("not_stockfish", config.greeting, keyword_map)
             goodbye = get_greeting("goodbye", config.greeting, keyword_map)
             hello_spectators = get_greeting("hello_spectators", config.greeting, keyword_map)
             goodbye_spectators = get_greeting("goodbye_spectators", config.greeting, keyword_map)

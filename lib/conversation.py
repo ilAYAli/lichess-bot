@@ -61,6 +61,8 @@ class Conversation:
         self.opponent_engine_type = ""
         self.greeting_started = False
         self.engine_follow_up_sent = False
+        self.not_stockfish_reply = ""
+        self.not_stockfish_sent = False
 
     command_prefix = "!"
 
@@ -84,6 +86,10 @@ class Conversation:
                     engine_name = name.rstrip()
                 self.send_engine_follow_up(self.other_engine_greeting, self.other_engine_greeting, engine_name)
 
+        elif self.is_opponent_stockfish_mention(line):
+            self.not_stockfish_sent = True
+            self.send_reply(line, self.not_stockfish_reply)
+
         if (self.auto_name_query_pending and line.room == "player"
                 and line.username.casefold() == self.game.username.casefold() and line.text == "!name"):
             self.auto_name_query_pending = False
@@ -98,6 +104,14 @@ class Conversation:
             return False
         expected_prefix = f"{self.game.opponent.name} running ".casefold()
         return line.text.casefold().startswith(expected_prefix)
+
+    def is_opponent_stockfish_mention(self, line: ChatLine) -> bool:
+        """Return whether the opponent mentions Stockfish in chat and we haven't answered yet."""
+        return (bool(self.not_stockfish_reply) and not self.not_stockfish_sent
+                and line.username.casefold() == self.game.opponent.name.casefold()
+                and line.username.casefold() != self.game.username.casefold()
+                and not line.text.startswith(self.command_prefix)
+                and "stockfish" in line.text.casefold())
 
     def opponent_engine_type_from_line(self, line: ChatLine) -> str:
         """Return the engine type reported in the opponent's !name reply."""

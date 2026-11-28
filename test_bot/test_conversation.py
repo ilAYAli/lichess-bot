@@ -129,3 +129,19 @@ def test_bio_lookup_detects_stockfish_anywhere(bio: str, expected: str) -> None:
     result: Future[str] = Future()
     conversation.lookup_stockfish_bio(result)
     assert result.result() == expected
+
+
+def test_opponent_stockfish_mention_gets_one_denial() -> None:
+    """Answer the opponent's first chat mention of Stockfish, in the room it was said."""
+    conversation = make_conversation()
+    conversation.not_stockfish_reply = "Not Stockfish, OtherBot."
+
+    conversation.react(ChatLine({"room": "player", "username": "EnyoBot", "text": "Am I playing Stockfish again?"}))
+    conversation.react(ChatLine({"room": "spectator", "username": "Watcher", "text": "is this stockfish?"}))
+    conversation.react(ChatLine({"room": "player", "username": "OtherBot",
+                                 "text": "OtherBot running Stockfish 18 (lichess-bot v2026.6.28.2)"}))
+    assert conversation.li.chat.call_args_list == []
+
+    conversation.react(ChatLine({"room": "player", "username": "OtherBot", "text": "Am I playing Stockfish again?"}))
+    conversation.react(ChatLine({"room": "player", "username": "OtherBot", "text": "Stockfish, surely?"}))
+    assert conversation.li.chat.call_args_list == [call("game-id", "player", "Not Stockfish, OtherBot.")]
